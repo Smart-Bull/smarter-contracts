@@ -1,2 +1,1 @@
-# solidity-
-Design documents for on-chain events and event handlers
+# Design documents for on-chain events and event handlers
