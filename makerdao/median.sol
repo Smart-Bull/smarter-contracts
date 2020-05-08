@@ -1,4 +1,4 @@
-/// median.sol
+/// median.sol from https://github.com/makerdao/median/blob/master/src/median.sol
 
 // Copyright (C) 2017-2020 Maker Ecosystem Growth Holdings, INC.
 
@@ -17,6 +17,8 @@
 
 pragma solidity >=0.5.10;
 
+/******* LibNote logs all the call data after each function call to the median contract
+   (Note: do not need to modify) *******/
 contract LibNote {
     event LogNote(
         bytes4   indexed  sig,
@@ -49,6 +51,7 @@ contract LibNote {
 contract Median is LibNote {
 
     // --- Auth ---
+    /******* wards maintains the authorization status of users *******/
     mapping (address => uint) public wards;
     function rely(address usr) external note auth { wards[usr] = 1; }
     function deny(address usr) external note auth { wards[usr] = 0; }
@@ -57,10 +60,18 @@ contract Median is LibNote {
         _;
     }
 
+    /* price */
     uint128        val;
+
+    /* timestamp of the last update */
     uint32  public age;
+
+    /* type of asset */
     bytes32 public constant wat = "ethusd"; // You want to change this every deploy
+
+    /* minimum writers quorum for poke */
     uint256 public bar = 1;
+
 
     // Authorized oracles, set by an auth
     mapping (address => uint256) public orcl;
@@ -80,6 +91,8 @@ contract Median is LibNote {
         wards[msg.sender] = 1;
     }
 
+
+    /******* read functions, called by osm *******/
     function read() external view toll returns (uint256) {
         require(val > 0, "Median/invalid-price-feed");
         return val;
@@ -89,6 +102,9 @@ contract Median is LibNote {
         return (val, val > 0);
     }
 
+
+    /*  recovers the address of a user based on the digested values
+    ecrecover: to verify a signature */
     function recover(uint256 val_, uint256 age_, uint8 v, bytes32 r, bytes32 s) internal pure returns (address) {
         return ecrecover(
             keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n32", keccak256(abi.encodePacked(val_, age_, wat)))),
@@ -96,6 +112,9 @@ contract Median is LibNote {
         );
     }
 
+    /******* Updates price from whitelisted providers, can be called by anyone *******/
+    /******* val_: a list of price that is signed by different oracles, age_: a list of timestamps to each price disclosed,
+             v, r, s: digested value for verifying oracle signatures *******/
     function poke(
         uint256[] calldata val_, uint256[] calldata age_,
         uint8[] calldata v, bytes32[] calldata r, bytes32[] calldata s) external
@@ -116,7 +135,7 @@ contract Median is LibNote {
             // Check for ordered values
             require(val_[i] >= last, "Median/messages-not-in-order");
             last = val_[i];
-            // Bloom filter for signer uniqueness
+            // Bloom filter for signer uniqueness: a data structure designed to tell whether an element is present in a set
             uint8 sl = uint8(uint256(signer) >> 152);
             require((bloom >> sl) % 2 == 0, "Median/oracle-already-signed");
             bloom += uint256(2) ** sl;
@@ -128,6 +147,7 @@ contract Median is LibNote {
         emit LogMedianPrice(val, age);
     }
 
+    /******* add an oracle to the oracl list *******/
     function lift(address[] calldata a) external note auth {
         for (uint i = 0; i < a.length; i++) {
             require(a[i] != address(0), "Median/no-oracle-0");
@@ -138,6 +158,7 @@ contract Median is LibNote {
         }
     }
 
+    /******* remove an oracle from the oracl list *******/
     function drop(address[] calldata a) external note auth {
        for (uint i = 0; i < a.length; i++) {
             orcl[a[i]] = 0;
