@@ -64,7 +64,7 @@ contract Receiver {
 	}
 
 	// Declare a listener
-	listener incomingUpdate(s.Update, (new_info) => {
+	listener IncomingUpdate(s.Update, (new_info) => {
 		info = new_info;
 
 		// do other stuff...
@@ -104,15 +104,15 @@ and could lead to negative outcomes such as inappropriate liquidations, or the
 // osm.sol: poke is supposed to be called by the poke user every hop (ONE_HOUR by default)
 /* next value becomes current if poke is done hop after the prev poke */
 function poke() external note stoppable {
-		require(pass(), "OSM/not-passed");
-		/* wut: price, ok: isValid */
-		(bytes32 wut, bool ok) = DSValue(src).peek();
-		if (ok) {
-				cur = nxt;
-				nxt = Feed(uint128(uint(wut)), 1);
-				zzz = prev(era());
-				emit LogValue(bytes32(uint(cur.val)));
-		}
+	require(pass(), "OSM/not-passed");
+	/* wut: price, ok: isValid */
+	(bytes32 wut, bool ok) = DSValue(src).peek();
+	if (ok) {
+		cur = nxt;
+		nxt = Feed(uint128(uint(wut)), 1);
+		zzz = prev(era());
+		emit LogValue(bytes32(uint(cur.val)));
+	}
 }
 ~~~~
 
@@ -120,12 +120,12 @@ function poke() external note stoppable {
 // spot.sol: poke is supposed to be called by the poke user so that value is updated from osm to vat
 // --- Update value ---
 function poke(bytes32 ilk) external {
-    (bytes32 val, bool has) = ilks[ilk].pip.peek();
-    // rdiv: divide two Rays and return a new Ray with the correct level of precision.
-    // A Ray is a decimal number with 27 digits of precision that is being represented as an integer.
-    uint256 spot = has ? rdiv(rdiv(mul(uint(val), 10 ** 9), par), ilks[ilk].mat) : 0;
-    vat.file(ilk, "spot", spot);
-    emit Poke(ilk, val, spot);
+	(bytes32 val, bool has) = ilks[ilk].pip.peek();
+	// rdiv: divide two Rays and return a new Ray with the correct level of precision.
+	// A Ray is a decimal number with 27 digits of precision that is being represented as an integer.
+	uint256 spot = has ? rdiv(rdiv(mul(uint(val), 10 ** 9), par), ilks[ilk].mat) : 0;
+	vat.file(ilk, "spot", spot);
+	emit Poke(ilk, val, spot);
 }
 ~~~~
 
@@ -137,43 +137,48 @@ With the new syntax defined, those two functions can be rewritten as following:
 trigger PriceUpdate(uint price);
 
 function poke() external note stoppable {
-		require(pass(), "OSM/not-passed");
-		/* wut: price, ok: isValid */
-		(bytes32 wut, bool ok) = DSValue(src).peek();
-		if (ok) {
-				cur = nxt;
-				nxt = Feed(uint128(uint(wut)), 1);
-				zzz = prev(era());
-				emit LogValue(bytes32(uint(cur.val)));
-        emit PriceUpdate(bytes32(uint(cur.val)));
-		}
+	require(pass(), "OSM/not-passed");
+	/* wut: price, ok: isValid */
+	(bytes32 wut, bool ok) = DSValue(src).peek();
+	if (ok) {
+		cur = nxt;
+		nxt = Feed(uint128(uint(wut)), 1);
+		zzz = prev(era());
+		emit LogValue(bytes32(uint(cur.val)));
+		emit PriceUpdate(bytes32(uint(cur.val)));
+	}
 }
 ~~~~
 
 ~~~~
 // spot.sol: poke is supposed to be called by the poke user so that value is updated from osm to vat
 // --- Data ---
-    struct Ilk {
-        PipLike pip;
-        uint256 mat;
-    }
+struct Ilk {
+  PipLike pip;
+  uint256 mat;
+}
 
-    mapping (bytes32 => Ilk) public ilks;
+mapping (bytes32 => Ilk) public ilks;
+mapping (bytes32 => listener) public price_listeners;
 
 
 // --- Registering osm ---
 function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
-        require(live == 1, "Spotter/not-live");
-        if (what == "pip") ilks[ilk].pip = OSM(osm_);
-        else revert("Spotter/file-unrecognized-param");
-    }
+  require(live == 1, "Spotter/not-live");
+  if (what == "pip") {
+    ilks[ilk].pip = OSM(osm_);
 
-// --- Listener ---
-listener updatePrice(s.PriceUpdate, (new_price) => {
-  uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
-  vat.file(ilk, "spot", spot);
-  emit Poke(ilk, val, spot); // just for logging, can be removed
-});
+    // populate listener list
+    price_listeners[ilk] =
+      listener UpdatePrice(ilks[ilk].pip.PriceUpdate, (new_price) => {
+        uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
+        vat.file(ilk, "spot", spot);
+        emit Poke(ilk, val, spot); // just for logging, can be removed
+    });
+  }
+  else revert("Spotter/file-unrecognized-param");
+}
+
 ~~~~
 
 ###### Compound
