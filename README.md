@@ -308,10 +308,20 @@ function runPeriodicals() external returns (bool) {
 #### Other Notes:
 It is interesting to consider that each of the three DeFi applications above deploy their own oracle. It would be feasible
 with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting
-a single event.  
-
+a single event.
+  
 
 ## 4: Blockchain Support:
+Notes:
+* It would be really helpful to implement a timer event based on the block length
+* Figure out how the timelock code in compound is used
+* When a trigger is emitted, special transactions are created spontaneously. These transactions are the event handlers for each
+of the contracts who are listening. There are a two main issues that have to be tackled:
+	* How to ensure that event handling seems immediate. We could employ the idea of a contract-wide lock. When an event 
+	handler gets executed, the transactions from the same contract currently in queue will be disabled until the event 
+	handler finished being executed.
+	* How to charge gas. One way to do it is to take the average of the gas prices of the regular transactions in the block
+	and multiply by a fixed ratio. This problem ties into how we incentivize miners to take on these transactions.
 
 
 ## 5: Other Considerations:
