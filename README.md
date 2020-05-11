@@ -12,8 +12,8 @@ on-chain event handling. This document will go over:
 
 ## 1. Motivation:
 
-Currently smart contracts, although very versitile, are not very smart. There is
-no way for a smart contract to execute its own code without an external agent explicitely
+Currently smart contracts, although very versatile, are not very smart. There is
+no way for a smart contract to execute its own code without an external agent explicitly
 calling the function. As a result, the seemingly simple task of updating the time of day
 autonomously is not possible in the current smart contract programming paradigm. For example,
 say you have a contract that needs to update interest rates once a month. Currently there
@@ -24,7 +24,7 @@ listen to another contract that emits events signifying the passing of time, and
 interest rate accordingly.  
 
 From now on in order to avoid confusion between the idea of on-chain events and the current
-implmentation of events in ethereum, which really only exist for logging, we will call
+implementation of events in ethereum, which really only exist for logging, we will call
 on-chain events 'triggers'. To explore the potential benefit of triggers, we will
 examine how it could be used to revise large DeFi applications such as MakerDAO and Compound
 to be more efficient. First we will provide a rough outline of what the syntax might look like.
@@ -40,7 +40,20 @@ public and therefore accessible from outside of the contract. The listener then
 handles the trigger through a handler. The trigger handler must have void return.
 
 * Use 'trigger' keyword to define a trigger
-* use 'listener' keywrod to define a listener
+* Instantiate a 'Listener' contract to define a listener
+
+~~~~
+contract Listener {
+  trigger listen_to;
+  func fall_back;
+  constructor(trigger _trigger, func _fall_back) public {
+		listen_to = _trigger;
+		fall_back = _fall_back;
+	}
+
+  // handle fall back...
+}
+~~~~
 
 ~~~~
 contract Sender {
@@ -63,13 +76,12 @@ contract Receiver {
 	}
 
 	// Declare a listener
-	listener IncomingUpdate(s.Update, (new_info) => {
+	listen Listener(s.Update, (new_info) => {
 		info = new_info;
 
 		// do other stuff...
 	});
 
-  // Instantiate
 }
 ~~~~
 
@@ -78,9 +90,9 @@ contract Receiver {
 
 ##### MakerDAO
 MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of
-Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD, 
-they need periodic updates to the outside prices. This is accomplished through the Median 
-module and the Oracle Security Module (OSM). 
+Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD,
+they need periodic updates to the outside prices. This is accomplished through the Median
+module and the Oracle Security Module (OSM).
 
 ![MakerDAO Price Update System](/images/MCD_System_2.0.png)
 
@@ -169,12 +181,14 @@ function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
 		ilks[ilk].pip = OSM(osm_);
 
 		// populate listener list
-		price_listeners[ilk] =
-		listener UpdatePrice(ilks[ilk].pip.PriceUpdate, (new_price) => {
+    Listener updatePrice =
+    Listener(ilks[ilk].pip.PriceUpdate, (new_price) => {
 			uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
 			vat.file(ilk, "spot", spot);
 			emit Poke(ilk, val, spot); // just for logging, can be removed
 		});
+    listen updatePrice;
+		price_listeners[ilk] = updatePrice;
 	}
 	else revert("Spotter/file-unrecognized-param");
 }
@@ -183,7 +197,7 @@ function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
 ##### Compound
 Compound is an implementation of a decentralized money market, where suppliers and borrowers of
 various decentralized assets can accrue and pay interest. The interest rates are algorithmically
-derived and are based on the supply and demand for the asset. Similar to MakerDAO, they need a price 
+derived and are based on the supply and demand for the asset. Similar to MakerDAO, they need a price
 feed which relies on an Oracle. We can find similar inefficiencies in implementation in Compound.
 
 In source file SimplePriceOracle.sol:
@@ -210,11 +224,11 @@ contract SimplePriceOracle is PriceOracle {
 ~~~~
 In the compound protocol, the oracle is updated periodically through the setUnderlyingPrice() method. Other contracts
 who then need the price reading call the getUnderlyingPrice() method. This implies that it would be up to other contracts
-to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we 
+to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we
 the newest price but the new price feed hasn't come in yet. This also opens up the possibility for other contracts to lag
-behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a 
+behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a
 method for pulling the newest price, we can simply emit a trigger from setUnderlyingprice(). We then have all contracts
-that are interested in the price feed declare a listener to listen to the trigger and act on it. 
+that are interested in the price feed declare a listener to listen to the trigger and act on it.
 
 In source file Timelock.sol:
 ~~~~
@@ -272,23 +286,23 @@ Augur is a prediction market on Ethereum. It uses a communal system driven by in
 
 The process is as following: After a market enters reporting phase, an Initial Reporter (typically the market creator), selects an outcome as the *Tentative Winning Outcome.* A user can *dispute* the Tentative Winning Outcome by staking REP on an alternative outcome. If a *Dispute Bond* is reached on an alternative outcome, the Tentative Winning Outcome changes to the new alternative outcome. Dispute Bond increases for each round of disputation.
 
-The delays in the process are done through an off-chain script [dispute.ts](https://github.com/AugurProject/augur/blob/008eee7c88303a69fff52196a189664aa6e4677e/packages/augur-tools/src/flash/dispute.ts). For the price oracle, similar to MakerDao, the price feed update relies on a "poke" from off-chain components.
+The delays in the process are done through an off-chain script [dispute.ts](https://github.com/AugurProject/augur/blob/008eee7c88303a69fff52196a189664aa6e4677e/packages/augur-tools/src/flash/dispute.ts). For the price oracle, similar to MakerDao, the price feed update relies on a "poke" from off-chain components. It is not as beneficial as the other two examples to have the event-driven feature in Augur, as there is a single listener (for calculating the required bond) to the event (price feed). And an up-to-date and accurate price is not as important since the market is handled with the stablecoin Dai.
 
 ```
 // packages/augur-core/source/contracts/reporting/Universe.sol
 function runPeriodicals() external returns (bool) {
-        uint256 _blockTimestamp = block.timestamp;
-        uint256 _timeSinceLastSweep = _blockTimestamp - lastSweep;
-        if (_timeSinceLastSweep > 1 days) {
-            sweepInterest();
-            return true;
-        }
-        uint256 _timeSinceLastRepOracleUpdate = _blockTimestamp - repOracle.getLastUpdateTimestamp(address(reputationToken));
-        if (_timeSinceLastRepOracleUpdate > 1 days) {
-            repOracle.poke(address(reputationToken));
-        }
-        return true;
-    }
+  uint256 _blockTimestamp = block.timestamp;
+  uint256 _timeSinceLastSweep = _blockTimestamp - lastSweep;
+  if (_timeSinceLastSweep > 1 days) {
+    sweepInterest();
+    return true;
+  }
+  uint256 _timeSinceLastRepOracleUpdate = _blockTimestamp - repOracle.getLastUpdateTimestamp(address(reputationToken));
+  if (_timeSinceLastRepOracleUpdate > 1 days) {
+    repOracle.poke(address(reputationToken));
+  }
+  return true;
+}
 ```
 
 #### Other Notes:
@@ -301,4 +315,3 @@ a single event.
 
 
 ## 5: Other Considerations:
-
