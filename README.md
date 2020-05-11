@@ -69,6 +69,8 @@ contract Receiver {
 
 		// do other stuff...
 	});
+
+  // Instantiate
 }
 
 ~~~~
@@ -164,21 +166,47 @@ mapping (bytes32 => listener) public price_listeners;
 
 // --- Registering osm ---
 function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
-  require(live == 1, "Spotter/not-live");
-  if (what == "pip") {
-    ilks[ilk].pip = OSM(osm_);
+	require(live == 1, "Spotter/not-live");
+	if (what == "pip") {
+		ilks[ilk].pip = OSM(osm_);
 
-    // populate listener list
-    price_listeners[ilk] =
-      listener UpdatePrice(ilks[ilk].pip.PriceUpdate, (new_price) => {
-        uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
-        vat.file(ilk, "spot", spot);
-        emit Poke(ilk, val, spot); // just for logging, can be removed
-    });
-  }
-  else revert("Spotter/file-unrecognized-param");
+		// populate listener list
+		price_listeners[ilk] =
+		listener UpdatePrice(ilks[ilk].pip.PriceUpdate, (new_price) => {
+			uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
+			vat.file(ilk, "spot", spot);
+			emit Poke(ilk, val, spot); // just for logging, can be removed
+		});
+	}
+	else revert("Spotter/file-unrecognized-param");
 }
 
 ~~~~
 
 ###### Compound
+
+###### Augur
+Augur is a prediction market on Ethereum. It uses a communal system driven by incentives to resolve the outcome of markets instead of using an oracle.
+
+![Augur disputation workflow](/images/augur_disputation.png)
+
+The process is as following: After a market enters reporting phase, an Initial Reporter (typically the market creator), selects an outcome as the *Tentative Winning Outcome.* A user can *dispute* the Tentative Winning Outcome by staking REP on an alternative outcome. If a *Dispute Bond* is reached on an alternative outcome, the Tentative Winning Outcome changes to the new alternative outcome. Dispute Bond increases for each round of disputation.
+
+The delays in the process are done through an off-chain script [dispute.ts](https://github.com/AugurProject/augur/blob/008eee7c88303a69fff52196a189664aa6e4677e/packages/augur-tools/src/flash/dispute.ts). For the price oracle, similar to MakerDao, the price feed update relies on a "poke" from off-chain components.
+
+```
+// packages/augur-core/source/contracts/reporting/Universe.sol
+function runPeriodicals() external returns (bool) {
+        uint256 _blockTimestamp = block.timestamp;
+        uint256 _timeSinceLastSweep = _blockTimestamp - lastSweep;
+        if (_timeSinceLastSweep > 1 days) {
+            sweepInterest();
+            return true;
+        }
+        uint256 _timeSinceLastRepOracleUpdate = _blockTimestamp - repOracle.getLastUpdateTimestamp(address(reputationToken));
+        if (_timeSinceLastRepOracleUpdate > 1 days) {
+            repOracle.poke(address(reputationToken));
+        }
+        return true;
+    }
+```
