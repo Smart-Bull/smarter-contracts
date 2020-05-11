@@ -4,10 +4,10 @@ This repository contains the design document for the implementation of
 on-chain event handling. This document will go over:
 
 1. Motivation
-2. Proposed syntax
+2. Proposed Syntax
 3. Applications
-4. Blockchain support
-5. Other considerations
+4. Blockchain Support
+5. Other Considerations
 
 
 ## 1. Motivation:
@@ -43,7 +43,6 @@ handles the trigger through a handler. The trigger handler must have void return
 * use 'listener' keywrod to define a listener
 
 ~~~~
-
 contract Sender {
 	// Declare a trigger
 	trigger Update(uint info);
@@ -72,20 +71,20 @@ contract Receiver {
 
   // Instantiate
 }
-
 ~~~~
 
 
 ## 3. Applications:
 
-
-###### MakerDAO
+##### MakerDAO
+MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of
+Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD, 
+they need periodic updates to the outside prices. This is accomplished through the Median 
+module and the Oracle Security Module (OSM). 
 
 ![MakerDAO Price Update System](/images/MCD_System_2.0.png)
 
-In order for MakerDAO to keep the value of Dai soft-pegged to USD, they need periodic updates
-to the outside prices. This is accomplished through the Median module and the
-Oracle Security Module (OSM). The Median communicates with outside sources to establish a price.
+The Median communicates with outside sources to establish a price.
 The OSM delays this feed for the rest of the system for added security. Because there is no way
 for a smart contract to listen to the feed and update the price automatically, off-chain users
 have to 'poke' the contracts in order to update the price. Ideally, contracts such as Median
@@ -163,7 +162,6 @@ struct Ilk {
 mapping (bytes32 => Ilk) public ilks;
 mapping (bytes32 => listener) public price_listeners;
 
-
 // --- Registering osm ---
 function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
 	require(live == 1, "Spotter/not-live");
@@ -180,12 +178,94 @@ function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
 	}
 	else revert("Spotter/file-unrecognized-param");
 }
-
 ~~~~
 
-###### Compound
+##### Compound
+Compound is an implementation of a decentralized money market, where suppliers and borrowers of
+various decentralized assets can accrue and pay interest. The interest rates are algorithmically
+derived and are based on the supply and demand for the asset. Similar to MakerDAO, they need a price 
+feed which relies on an Oracle. We can find similar inefficiencies in implementation in Compound.
 
-###### Augur
+In source file SimplePriceOracle.sol:
+~~~~
+contract SimplePriceOracle is PriceOracle {
+	...
+
+    function getUnderlyingPrice(CToken cToken) public view returns (uint) {
+        if (compareStrings(cToken.symbol(), "cETH")) {
+            return 1e18;
+        } else {
+            return prices[address(CErc20(address(cToken)).underlying())];
+        }
+    }
+
+    function setUnderlyingPrice(CToken cToken, uint underlyingPriceMantissa) public {
+        address asset = address(CErc20(address(cToken)).underlying());
+        emit PricePosted(asset, prices[asset], underlyingPriceMantissa, underlyingPriceMantissa);
+        prices[asset] = underlyingPriceMantissa;
+    }
+
+	...
+}
+~~~~
+In the compound protocol, the oracle is updated periodically through the setUnderlyingPrice() method. Other contracts
+who then need the price reading call the getUnderlyingPrice() method. This implies that it would be up to other contracts
+to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we 
+the newest price but the new price feed hasn't come in yet. This also opens up the possibility for other contracts to lag
+behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a 
+method for pulling the newest price, we can simply emit a trigger from setUnderlyingprice(). We then have all contracts
+that are interested in the price feed declare a listener to listen to the trigger and act on it. 
+
+In source file Timelock.sol:
+~~~~
+contract Timelock {
+	...
+
+    function queueTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public returns (bytes32) {
+        require(msg.sender == admin, "Timelock::queueTransaction: Call must come from admin.");
+        require(eta >= getBlockTimestamp().add(delay), "Timelock::queueTransaction: Estimated execution block must satisfy delay.");
+
+        bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
+        queuedTransactions[txHash] = true;
+
+        emit QueueTransaction(txHash, target, value, signature, data, eta);
+        return txHash;
+    }
+
+    function cancelTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public {
+        require(msg.sender == admin, "Timelock::cancelTransaction: Call must come from admin.");
+
+        bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
+        queuedTransactions[txHash] = false;
+
+        emit CancelTransaction(txHash, target, value, signature, data, eta);
+    }
+
+    function executeTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public payable returns (bytes memory) {
+        require(msg.sender == admin, "Timelock::executeTransaction: Call must come from admin.");
+
+        bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
+        require(queuedTransactions[txHash], "Timelock::executeTransaction: Transaction hasn't been queued.");
+        require(getBlockTimestamp() >= eta, "Timelock::executeTransaction: Transaction hasn't surpassed time lock.");
+        require(getBlockTimestamp() <= eta.add(GRACE_PERIOD), "Timelock::executeTransaction: Transaction is stale.");
+
+		...
+
+        emit ExecuteTransaction(txHash, target, value, signature, data, eta);
+
+        return returnData;
+    }
+
+	...
+}
+~~~~
+This source file contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum
+delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol.
+This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon
+a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have
+to be implemented in a different way.
+
+##### Augur
 Augur is a prediction market on Ethereum. It uses a communal system driven by incentives to resolve the outcome of markets instead of using an oracle.
 
 ![Augur disputation workflow](/images/augur_disputation.png)
@@ -210,3 +290,15 @@ function runPeriodicals() external returns (bool) {
         return true;
     }
 ```
+
+#### Other Notes:
+It is interesting to consider that each of the three DeFi applications above deploy their own oracle. It would be feasible
+with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting
+a single event.  
+
+
+## 4: Blockchain Support:
+
+
+## 5: Other Considerations:
+
