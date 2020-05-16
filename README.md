@@ -1,61 +1,39 @@
 # Smarter Contracts Through On-Chain Event Handling:
 
-This repository contains the design document for the implementation of
-on-chain event handling. This document will go over:
+This repository contains the design document for the implementation of on-chain event handling.
 
-1. Motivation
-2. Proposed Syntax
-3. Applications
-4. Blockchain Support
-5. Other Considerations
+1. Introduction
+2. Proposed Functionality and Syntax
+3. Blockchain Support
+4. Applications
 
 
-## 1. Motivation:
+## 1. Introduction:
 
-Currently smart contracts, although very versatile, are not very smart. There is
-no way for a smart contract to execute its own code without an external agent explicitly
-calling the function. As a result, the seemingly simple task of updating the time of day
-autonomously is not possible in the current smart contract programming paradigm. For example,
-say you have a contract that needs to update interest rates once a month. Currently there
-are two options. You either poke the contract with an external account yourself, or you get
-someone else such as the Ethereum Alarm Clock to do it. Either way, shouldn't doing something
-like this be a little more automated? In an event driven programming paradigm, you could just
-listen to another contract that emits events signifying the passing of time, and update the
-interest rate accordingly.  
+Currently in the world of smart contract development, there is no way for a smart contract to execute its own code without an external agent explicitly calling it. As a result, seemingly simple tasks 
+such as updating the time of day periodically is not possible without either calling an update function from a seperate account, or subscribing to a service such as the Ethereum Alarm Clock.
+In a more general sense, it would be nice if Ehtereum offered a way to allow for event driven programming. Some systems naturally lend themselves to the event driven paradigm. For example, it is the
+common case with decentralized finance (DeFi) applications that they need information from oracles. Naturally it would seem natural for all contracts in the system to listen to the oracle, 
+and update their state when the oracle updates their information. Of course, this isn't possible right now. We will later look at a few DeFi applications and how they deal with this issue. 
+It involves a lot of periodic pokes/updates from external accounts that we believe are suboptimal both in a ease of development but also network usage.
 
-From now on in order to avoid confusion between the idea of on-chain events and the current
-implementation of events in ethereum, which really only exist for logging, we will call
-on-chain events 'triggers'. To explore the potential benefit of triggers, we will
-examine how it could be used to revise large DeFi applications such as MakerDAO and Compound
-to be more efficient. First we will provide a rough outline of what the syntax might look like.
+There are three main pieces of functionality that we want to achieve:
+	1. Emit a trigger that other contracts can listen to
+	2. Listen to triggers that other contracts emit and handle them
+	3. Provide functionality for delayed execution of code
+
+To implement this feature, it will involve adding programming language features to Solidity as well as making slight modifications to the blockchain itself. This along with potential applications
+of this feature will be discussed in this document. In order to avoid confusion between what we are trying to implement and the current implementation of events in ethereum, which really only exist 
+for logging, we will call on-chain events 'triggers'.
+
+In this document, we will discuss what the feature might look like to smart contract developers, the challenges of implementing this on a blockchain, and finally a list of potential applications on 
+real world DeFi applications such as MakerDAO, Compound, and Augur.
 
 
-## 2. Proposed Syntax:
+## 2. Proposed Functionality and Syntax:
 
-What we proposed is very similar to current event driven programming languages such as JavaScript.
-Event is an reserved keyword in solidity, whose arguments are logged on the ledger so that anyone can listen to.
-To avoid confusion, we use trigger as the alternative keyword. A trigger carries
-some information that should be delivered to the listener. A trigger is by default
-public and therefore accessible from outside of the contract. The listener then
-handles the trigger through a handler. The trigger handler must have void return.
-
-* Use 'trigger' keyword to define a trigger
-* Instantiate a 'Listener' contract to define a listener
-
-~~~~
-contract Listener {
-  trigger listen_to;
-  func fall_back;
-  constructor(trigger _trigger, func _fall_back) public {
-		listen_to = _trigger;
-		fall_back = _fall_back;
-	}
-
-  // handle fall back...
-}
-~~~~
-
-~~~~
+* To emit a trigger, we declare it in a contract similar to a logging event, then use the emit keyword to broadcast that trigger across the network.
+```
 contract Sender {
 	// Declare a trigger
 	trigger Update(uint info);
@@ -64,56 +42,105 @@ contract Sender {
 		emit Update(info);
 	}
 }
-
+```
+* To listen to a trigger, we declare a listener and use a ES6 inspired call-back syntax to write an event handler.
+```
 contract Receiver {
 	uint public info;
 	Sender public s;
+	
+	// Declare a listener
+	listener updateHandler;
 
-	// get ABI of Sender
+	// Get ABI of Sender
 	constructor(address sender_addr) public {
 		s = Sender(sender_addr);
 		info = 0;
 	}
 
-	// Declare a listener
-	listen Listener(s.Update, (new_info) => {
+	// Provide trigger handler
+	updateHandler(s.Update, (new_info) => {
 		info = new_info;
-
-		// do other stuff...
+		// void return
 	});
-
 }
-~~~~
+```
+* To emit a trigger after a time delay, emit with the delay method. The argument is the number of block numbers to delay by. As of writing, ethereum generates around one block every 13 seconds.
+```
+contract Sender {   
+	// Declare a trigger
+	trigger Update(uint info);
+	
+	function x(uint info) public {
+		emit Update(info).delay(1000);
+	}
+}
+```
+* A common useful example would be to create an event handler that constantly updates its state periodically. This contact would look like something like this.
+```
+contract Heartbeat {
+	uint public count;
+	trigger Beep();
+	listener countBeeps;
+
+	constructor() public {
+		count = 0;
+		emit Beep().delay(1000);
+	}
+
+	countBeeps(Beep, () => {
+		count = count + 1;
+		emit Beep().delay(1000);
+	}
+}
+```
+
+## 3. Blockchain Support:
+
+To bring these features to life, there are numerous challenges to address. These range from incentive mechanisms on the blockchain to introducing new constructs into solidity. In this section
+we will look at some of these issues and describe potential solutions. A formal description can be found in formalized.md.
+
+#### Blockchain State
+In order for EVM to know which handlers to invoke at the emission of a trigger, there has to be some mapping between a trigger and its listeners. To this, we will have to treat events similar
+to storage state of contracts. Since triggers are encoded into the state, we will need new opcodes in EVM that act on this state.
+
+#### Execution of Listeners
+There are two options into how we execute handlers. We can either interrupt the emitter of the trigger and execute the event handler right away, or we have the execution of the event handler be
+delayed by creating another transaction on the spot. Because we can't be guarenteed about the size of event handlers, or whether they themselves emit events, we opted for the second option. 
+Each time a trigger is emitted, EVM will create a new transaction for the event handler and will be put in a transaction pool to be picked out by miners. Another idea we have is to impose a
+contract wide lock to ensure that event handlers are executed before other calls to the contract. 
+
+#### Incentives
+We need to provide incentives to miners to validate the block. Because event handler transactions are generated dynamically, it doesn't have a set gas price. To solve this, we could have the gas
+price of the event handler contract be calculated as a fixed ratio multiplied by the average gas price of the other contracts in the block. This way, miners would be incentivized to pick up 
+these special transactions. Also, we would need to put a limit on the ratio between the number of event handler trasactions we have and normal transactions. The gas for the execution of event 
+handlers payed for by the contract with the event handler, not the emitter. We also have to be careful to not overcharge users who want to use this feature properly. 
+
+#### Concerns
+* One concern is that the EVM state could blow up if we had loops of triggers and listeners. We don't see this as an attack opportunity as the attack would have to pay for the gas of the event handler.
+Also emitting events costs more gas than the regular operation so there would be a limit to the number of times someone could emit events.
 
 
-## 3. Applications:
+## 4. Applications:
 
-##### MakerDAO
-MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of
-Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD,
-they need periodic updates to the outside prices. This is accomplished through the Median
-module and the Oracle Security Module (OSM).
+#### MakerDAO
+MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD,
+they need periodic updates to the outside prices. This is accomplished through the Median module and the Oracle Security Module (OSM).
 
-![MakerDAO Price Update System](/images/MCD_System_2.0.png)
+![MakerDAO Price Update System](/images/mcd_osm.png)
 
-The Median communicates with outside sources to establish a price.
-The OSM delays this feed for the rest of the system for added security. Because there is no way
-for a smart contract to listen to the feed and update the price automatically, off-chain users
-have to 'poke' the contracts in order to update the price. Ideally, contracts such as Median
+The Median communicates with outside sources to establish a price. The OSM delays this feed for the rest of the system for added security. Because there is no way
+for a smart contract to listen to the feed and update the price automatically, off-chain users have to 'poke' the contracts in order to update the price. Ideally, contracts such as Median
 could broadcast an event which OSM or Spot could act on instead of having an external user poke.
 
-The benefits to having this construct goes beyond style and convenience. On March 12-13, due to
-a huge drop in the crypto market as well as network congestion, many vault owners had their
-vaults liquidated for very little. There is a chance that with a new feature that allows for
-on-chain event handling, there would be less 'poking' across the entire Ethereum network and
+The benefits to having this construct goes beyond style and convenience. On March 12-13, due to a huge drop in the crypto market as well as network congestion, many vault owners had their
+vaults liquidated for very little. There is a chance that with a new feature that allows for on-chain event handling, there would be less 'poking' across the entire Ethereum network and
 overall less network congestion.
 
-The current implementation relies heavily on the external poke users. Therefore, a possible failure,
-which has been proved to be a threat to the integrity of the system, is the price is not updated frequently enough.
-This could arise for a few reasons including tragedy of the commons or miner collusion
-and could lead to negative outcomes such as inappropriate liquidations, or the
- prevention of liquidations that should be possible.
-~~~~
+The current implementation relies heavily on the external poke users. Therefore, a possible failure, which has been proved to be a threat to the integrity of the system, is the price 
+is not updated frequently enough. This could arise for a few reasons including tragedy of the commons or miner collusion and could lead to negative outcomes such as inappropriate liquidations, 
+or the  prevention of liquidations that should be possible.
+```
 // osm.sol: poke is supposed to be called by the poke user every hop (ONE_HOUR by default)
 /* next value becomes current if poke is done hop after the prev poke */
 function poke() external note stoppable {
@@ -127,9 +154,9 @@ function poke() external note stoppable {
 		emit LogValue(bytes32(uint(cur.val)));
 	}
 }
-~~~~
+```
 
-~~~~
+```
 // spot.sol: poke is supposed to be called by the poke user so that value is updated from osm to vat
 // --- Update value ---
 function poke(bytes32 ilk) external {
@@ -140,10 +167,10 @@ function poke(bytes32 ilk) external {
 	vat.file(ilk, "spot", spot);
 	emit Poke(ilk, val, spot);
 }
-~~~~
+```
 
 With the new syntax defined, those two functions can be rewritten as following:
-~~~~
+```
 // osm.sol: poke is supposed to be called by the poke user every hop (ONE_HOUR by default)
 /* next value becomes current if poke is done hop after the prev poke */
 
@@ -161,9 +188,9 @@ function poke() external note stoppable {
 		emit PriceUpdate(bytes32(uint(cur.val)));
 	}
 }
-~~~~
+```
 
-~~~~
+```
 // spot.sol: poke is supposed to be called by the poke user so that value is updated from osm to vat
 // --- Data ---
 struct Ilk {
@@ -192,16 +219,24 @@ function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
 	}
 	else revert("Spotter/file-unrecognized-param");
 }
-~~~~
+```
 
-##### Compound
+#### Compound
 Compound is an implementation of a decentralized money market, where suppliers and borrowers of
 various decentralized assets can accrue and pay interest. The interest rates are algorithmically
 derived and are based on the supply and demand for the asset. Similar to MakerDAO, they need a price
 feed which relies on an Oracle. We can find similar inefficiencies in implementation in Compound.
 
-In source file SimplePriceOracle.sol:
-~~~~
+In the compound protocol, the oracle is updated periodically through the setUnderlyingPrice() method. Other contracts
+who then need the price reading call the getUnderlyingPrice() method. This implies that it would be up to other contracts
+to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we
+the newest price but the new price feed hasn't come in yet. This also opens up the possibility for other contracts to lag
+behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a
+method for pulling the newest price, we can simply emit a trigger from setUnderlyingprice(). We then have all contracts
+that are interested in the price feed declare a listener to listen to the trigger and act on it.
+
+In source file SimplePriceOracle.
+```
 contract SimplePriceOracle is PriceOracle {
 	...
 
@@ -221,17 +256,19 @@ contract SimplePriceOracle is PriceOracle {
 
 	...
 }
-~~~~
-In the compound protocol, the oracle is updated periodically through the setUnderlyingPrice() method. Other contracts
-who then need the price reading call the getUnderlyingPrice() method. This implies that it would be up to other contracts
-to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we
-the newest price but the new price feed hasn't come in yet. This also opens up the possibility for other contracts to lag
-behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a
-method for pulling the newest price, we can simply emit a trigger from setUnderlyingprice(). We then have all contracts
-that are interested in the price feed declare a listener to listen to the trigger and act on it.
+```
+
+This source file contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum
+delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol.
+This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon
+a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have
+to be implemented in a different way.
+Furthermore, the initial purpose of the Timelock contract is to provide a delay buffer for when a proposal is accepted
+and when it is taken into effect. If we could implement a time delay handler based on the block number, we theoretically
+wouldn't even need this time locking feature.
 
 In source file Timelock.sol:
-~~~~
+```
 contract Timelock {
 	...
 
@@ -272,14 +309,9 @@ contract Timelock {
 
 	...
 }
-~~~~
-This source file contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum
-delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol.
-This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon
-a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have
-to be implemented in a different way.
+```
 
-##### Augur
+#### Augur
 Augur is a prediction market on Ethereum. It uses a communal system driven by incentives to resolve the outcome of markets instead of using an oracle.
 
 ![Augur disputation workflow](/images/augur_disputation.png)
@@ -310,18 +342,3 @@ It is interesting to consider that each of the three DeFi applications above dep
 with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting
 a single event.
   
-
-## 4: Blockchain Support:
-Notes:
-* It would be really helpful to implement a timer event based on the block length
-* Figure out how the timelock code in compound is used
-* When a trigger is emitted, special transactions are created spontaneously. These transactions are the event handlers for each
-of the contracts who are listening. There are a two main issues that have to be tackled:
-	* How to ensure that event handling seems immediate. We could employ the idea of a contract-wide lock. When an event 
-	handler gets executed, the transactions from the same contract currently in queue will be disabled until the event 
-	handler finished being executed.
-	* How to charge gas. One way to do it is to take the average of the gas prices of the regular transactions in the block
-	and multiply by a fixed ratio. This problem ties into how we incentivize miners to take on these transactions.
-
-
-## 5: Other Considerations:
