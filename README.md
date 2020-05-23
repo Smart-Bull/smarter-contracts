@@ -97,7 +97,7 @@ contract Heartbeat {
 ## 3. Blockchain Support:
 
 To bring these features to life, there are numerous challenges to address. These range from incentive mechanisms on the blockchain to introducing new constructs into solidity. In this section
-we will look at some of these issues and describe potential solutions. A formal description can be found in formalized.md.
+we will look at some of these issues and describe potential solutions. A formal description can be found in FORMALIZED.md.
 
 #### Blockchain State
 In order for EVM to know which handlers to invoke at the emission of a trigger, there has to be some mapping between a trigger and its listeners. To this, we will have to treat events similar
@@ -121,6 +121,29 @@ Also emitting events costs more gas than the regular operation so there would be
 * Another concern is whether the cost for event emitter is high enough so that they won't flood the system with events that no one listens to. We suggest to introduce cost to the emitter in the form of bonded storage. In other words, emitters need to "lock" some of their tokens for a period of time in order to emit an event.
 
 ### Implementation Proposal
+This is an informal description of how we propose to implement this feature on an actual blockchain network.
+
+#### Unique triggers
+To make sure each trigger is identifiable, we assign it an id derived from the ethereum account address. During the contract construction, each trigger is given an arbitrary number. This number could just
+be 1 for the first trigger, 2 for the second and so on. We let the trigger id be `Tid`, arbitrarily assigned trigger number be `Tn`, and `A` be the contract address. Then: `Tid = KEC(A + Tn)`.
+This ensures that trigger id's are almost guarenteed to be unique. When an id is assigned it cannot change and will be the way we refer to this trigger in the future.   
+
+#### Account state
+When a trigger is emitted, the miners need to know which handlers correspond to that trigger. We accomplish this through a trie that maps any given relevant trigger id to the RLP encoding of the
+handling code as well as list of listening addresses. The code for the event handlers on this trie cannot be manipulated once the contract is deployed. However, listening contract addresses can be added
+on but only by external contracts. This trie is the basis for how we determine which handlers to use for each trigger. When a miner executes the emit instruction, we use the trigger id to index into the
+trie to figure out which contracts are listening to this event. A special handler transaction is then created and put on the block state and signed by the emitter of this trigger. 
+Nodes that aren't full can just store the root hash instead of the entire tree. In this transaction, there will be three fields. The listener contract address, the trigger id, and the blocknum.
+The blocknum indicates the blocknumber that we wait until before the transaction is valid to be executed.
+
+#### Block state
+To ensure that triggers are handled properly by miners, we add an extra field to the block. Similar to the transaction trie, we construct a handler trie consisting of all the handler transactions that 
+are queued up to be mined. This trie is populated accordingly when triggers are emitted. Transactions on the trie are removed when miners decide to process those handler transactions. It is to note 
+that it is invalid to process a transaction that has a blocknum greater than the current blocknum.  
+
+#### EVM
+The manipulations in the account state and block state are facillitated through a few new opcodes found in EVM. One of them will be used to emit triggers while the other will be used to subscribe a 
+listener to another event. Furthermore, changes to init will have to be made to construct the account state trie. More detailed consideration of these opcodes are in FORMALIZED.md.
 
 #### Generation of handler transactions
 There are two types of handler transactions to create corresponding to each of the trigger types: immediate trigger and delayed trigger. Immediate trigger requires the call to handler added to the transaction pool immediately after an event is seen. On the other hand, call to handler for a delayed trigger is added after the specified block time expires.
@@ -138,7 +161,6 @@ One way to generate the handler transactions is to have the clients to make a ca
 2. insert_new_transactions
 	- where the lookup for handler happens
 	- generate transaction for handler calls here on behalf of the handler contract (also need to memorize a transaction for delayed handler) [Unanswered question: is it feasible to create a handler contract transaction in the transaction pool?]
-
 
 
 ## 4. Applications:
@@ -361,3 +383,8 @@ function runPeriodicals() external returns (bool) {
 It is interesting to consider that each of the three DeFi applications above deploy their own oracle. It would be feasible
 with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting
 a single event.
+
+## References:
+
+
+
