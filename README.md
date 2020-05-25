@@ -27,12 +27,13 @@ To summarize, the key pieces of functionality are the folowing:
 2. Emission of signals with parameters that can be used by slots
 3. Delayed emission of a signal by a certain amount of time (approximated by block numbers)
 4. Execution of a block of code whenever a signal of interest is emitted using slots
-5. Guarentee that slots will be executed eventually given that there is sufficient gas
-6. Guarentee that slots are executed before any pending transactions in the contract
+5. Slots can bind to multiple different signals
+6. Guarentee that slots will be executed eventually given that there is sufficient gas
+7. Guarentee that slots are executed before any pending transactions in the contract
 
 Further, limitations of this feature include:
 1. Slots can only bind to one signal, and that signal must already exist on the network prior to deployment
-2. Slots cannot change the signal they are binded to once the contract is deployed
+2. Slots cannot unbind from a signal one binded
 3. Slots must return void
 
 ## 2. Proposed Syntax
@@ -121,7 +122,7 @@ Now that we have a proper mapping between signals and slots/listeners, we need a
 #### State Transitions
 In this subsection we will discuss how the new EVM opcodes BINDSIG and EMITSIG impact the world state and block header as well as what happens when slots are picked up and mined.
 ##### BINDSIG
-This opcode takes the contract takes a contract address, signal identifier, and a slot (pointer to code) as arguments. BINDSIG can only be executed during contract creation. Let `A` be the account executing BINDSIG, `B` be the contract address passed as the argument, `SIG` be the signal identifier, and `SLT` be the slot. The first part of the execution involves updating the mapping so that `A.signalMap[SIG] -> RLP(SLT, NULL)`. At this time, the listener list should be `NULL`. Next, we form update the mapping on `B.signalMap` so that `B.signalMap[SIG] -> RLP(DC, L')` where `DC` is "don't care" and `L'` is the new list of listener contract addresses formed by appending `A` to the previous `L`. Note that having `A` be the same as `B` is valid,
+This opcode takes the contract takes a contract address, signal identifier, and a slot (pointer to code) as arguments. BINDSIG can be called anywhere. Recall that a slot can bind to multiple signals but this operation cannot be undone. Let `A` be the account executing BINDSIG, `B` be the contract address passed as the argument, `SIG` be the signal identifier, and `SLT` be the slot. The first part of the execution involves updating the mapping so that `A.signalMap[SIG] -> RLP(SLT, NULL)`. At this time, the listener list should be `NULL`. Next, we form update the mapping on `B.signalMap` so that `B.signalMap[SIG] -> RLP(DC, L')` where `DC` is "don't care" and `L'` is the new list of listener contract addresses formed by appending `A` to the previous `L`. Note that having `A` be the same as `B` is valid,
 ##### EMITSIG
 This opcode takes the signal identifier, block delay parameter, and pointer to the list of signal parameters as arguments. The block delay parameter must be greater than or equal to 0. EMITSIG can be called anywhere, including the contract constructor. Let `A` be the account that is executing EMITSIG. The system will use `A.signalMAP` to find the list of listener addresses. Let `Li` be i'th listener in the list. We increment `Li.activeSlots` to reflect that they now have a slot queued up for execution. The next step is to change the block header. Using the current block number and the delay parameter, we calculate the block number at which the slot should be executed. Let this be `B`. We then update the mapping in the queued slot tree so that `KEC(B) -> RLP(FIFOQUEUE(...).push(RLP(Li, SIG, P)))`. In this step, we also copy over the parameters into `P`. 
 ##### Mining a Slot 
