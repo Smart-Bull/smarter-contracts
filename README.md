@@ -27,7 +27,7 @@ To summarize, the key pieces of functionality are the folowing:
 2. Emission of signals with parameters that can be used by slots
 3. Delayed emission of a signal by a certain amount of time (approximated by block numbers)
 4. Execution of a block of code whenever a signal of interest is emitted using slots
-5. Slots can bind to multiple different signals
+5. Binding of a single slot to multiple different signals
 6. Guarentee that slots will be executed eventually given that there is sufficient gas
 7. Guarentee that slots are executed before any pending transactions in the contract
 
@@ -104,7 +104,7 @@ contract Heartbeat {
 This section will cover the additional components added to the blockchain state to implement signals/slots as well as how the blockchain state changes to reflect the emission of a signal or execution of a slot. This section relies heavily on the content from the Ethereum Yellow Paper. A more formal description will be presented in a seperate document.
 
 #### EVM Opcodes
-Blockchains can be considered to be a large distributed state machine that transitions states through the execution of transactions. A big part of a transaction is the execution of a smart contract from start to finish on the Ethereum Virtual Machine (EVM). Ethereum smart contracts are mostly written in a domain specific language called Solidity, and are compiled down to EVM bytecode. The EVM opcodes are the cause for the majority of state transitions on the blockchain. Current EVM opcodes as well as their state transitions can be found in the Ethereum Yellow Paper. To implement signals/slots, we introduce three new EVM opcodes, BINDSIG and EMITSIG. We will describe what their state transition represents after defining the new pieces of the blockchain state.
+Blockchains can be considered to be a large distributed state machine that transitions states through the execution of transactions. A big part of a transaction is the execution of a smart contract from start to finish on the Ethereum Virtual Machine (EVM). Ethereum smart contracts are mostly written in a domain specific language called Solidity, and are compiled down to EVM bytecode. The EVM opcodes are the cause for the majority of state transitions on the blockchain. Current EVM opcodes as well as their state transitions can be found in the Ethereum Yellow Paper. To implement signals/slots, we introduce three new EVM opcodes, BINDSIG and EMITSIG. We will describe what their state transition represents after describing the new pieces of the blockchain state.
 
 #### Signals
 For various reasons that will be apparent later, we need every signal on the network to have a unique identifier. We can get strong guarentees for a unique 32 byte identifier by using the `KEC()` hash function along with the contract address. For example, `sigID = KEC(contractAddr + offset)` should be sufficient to generate a unique identifier. If we have multiple signals in the same contract, we can adjust `offset` to produce multiple unique identifiers. This generation of unique identifiers should be done during contract creation.
