@@ -1,187 +1,141 @@
-# Smarter Contracts Through On-Chain Event Handling:
+# Signals and Slots in Smart Contract Execution
+This repository presents a high level description of our conception and implementation of signals and slots in the context of smart contract execution. A more formal description will be in a seperate document. The term "signals and slots" is borrowed from the language construct introduced by Qt for communications between objects. As we describe later, we aim to provide a high level functionality that is similar to what was introduced by Qt, except with communications between contracts rather than objects. This document is split into the following sections:
 
-This repository contains the design document for the implementation of on-chain event handling.
-
-1. Introduction
-2. Proposed Functionality and Syntax
+1. Specifications
+2. Proposed Syntax
+    * Signals
+    * Slots
+    * Delayed Emit
 3. Blockchain Support
-4. Applications
+    * EVM Opcodes
+    * Signals
+    * Slots
+    * World State
+    * Block Header
+    * State Transitions
+    * Mining Incentives
+4. Potential Applications
+    * MakerDAO
+    * Compound
+    * Augur
 
+## 1. Specifications
+The general idea of signals and slots is to provide a framework for contracts to execute a certain block of code when a certain event occurs. We call the event a 'signal' and the listener a 'slot'. In the signals/slots construct, the emitter of the signal does not need to know who is listening to the signal. This property is very useful for smart contract development because this allows developers to add slots to a certain signals without redeploying the contract that emits the signal. 
 
-## 1. Introduction:
+To summarize, the key pieces of functionality are the folowing:
+1. Emission of signals that any number of slots can listen
+2. Emission of signals with parameters that can be used by slots
+3. Delayed emission of a signal by a certain amount of time (approximated by block numbers)
+4. Execution of a block of code whenever a signal of interest is emitted using slots
+5. Guarentee that slots will be executed eventually given that there is sufficient gas
+6. Guarentee that slots are executed before any pending transactions in the contract
 
-Currently in the world of smart contract development, there is no way for a smart contract to execute its own code without an external agent explicitly calling it. As a result, seemingly simple tasks
-such as updating the time of day periodically is not possible without either calling an update function from a seperate account, or subscribing to a service such as the Ethereum Alarm Clock.
-In a more general sense, it would be nice if Ehtereum offered a way to allow for event driven programming. Some systems naturally lend themselves to the event driven paradigm. For example, it is the
-common case with decentralized finance (DeFi) applications that they need information from oracles. Naturally it would seem natural for all contracts in the system to listen to the oracle,
-and update their state when the oracle updates their information. Of course, this isn't possible right now. We will later look at a few DeFi applications and how they deal with this issue.
-It involves a lot of periodic pokes/updates from external accounts that we believe are suboptimal both in a ease of development but also network usage.
+Further, limitations of this feature include:
+1. Slots can only bind to one signal, and that signal must already exist on the network prior to deployment
+2. Slots cannot change the signal they are binded to once the contract is deployed
+3. Slots must return void
 
-There are three main pieces of functionality that we want to achieve:
-	1. Emit a trigger that other contracts can listen to
-	2. Listen to triggers that other contracts emit and handle them
-	3. Provide functionality for delayed execution of code
+## 2. Proposed Syntax
+This section covers what the solidity syntax support for signals/slots might look like. This is tentative and may not be the best design. One source of bugs might come from developers either forgetting to bind the slots to signals in the constructor or mismatching the parameters of the slots with those of the signals they intend on listening to. This execution behaviour is undetermined for now. It would be best if such errors could be detected at compile time.
 
-To implement this feature, it will involve adding programming language features to Solidity as well as making slight modifications to the blockchain itself. This along with potential applications
-of this feature will be discussed in this document. In order to avoid confusion between what we are trying to implement and the current implementation of events in ethereum, which really only exist
-for logging, we will call on-chain events 'triggers'.
-
-In this document, we will discuss what the feature might look like to smart contract developers, the challenges of implementing this on a blockchain, and finally a list of potential applications on
-real world DeFi applications such as MakerDAO, Compound, and Augur.
-
-
-## 2. Proposed Functionality and Syntax:
-
-* To emit a trigger, we declare it in a contract similar to a logging event, then use the emit keyword to broadcast that trigger across the network.
+#### Signals
+To emit a signal, declare the signal in a contract then use the emit keyword to broadcast it across the network. At this time we also declare the types of the parameters.
 ```
 contract Sender {
-	// Declare a trigger
-	trigger Update(uint info);
+	// Declare a signal
+	signal Update(uint info);
 
-	function x(uint info) public {
+	function sendUpdate(uint info) public {
 		emit Update(info);
 	}
 }
 ```
-* To listen to a trigger, we declare a listener and use a ES6 inspired call-back syntax to write an event handler.
+#### Slots
+To listen to a signal, declare a slot and bind it to a specific signal in the constructor.
 ```
 contract Receiver {
 	uint public info;
 	Sender public s;
 
-	// Declare a listener
-	listener updateHandler;
+	// Declare a slot and define its code
+	slot updateHandler(new_info) {
+        info = new_info;
+    }
 
-	// Get ABI of Sender
+	// Get ABI of Sender and bind updateHandler to it
 	constructor(address sender_addr) public {
 		s = Sender(sender_addr);
-		info = 0;
-		// Provide trigger handler
-		updateHandler(s.Update, (new_info) => {
-			info = new_info;
-			// void return
-		});
+        updateHandler.bind(s.Update);
 	}
 }
 ```
-* To emit a trigger after a time delay, emit with the delay method. The argument is the number of block numbers to delay by. As of writing, ethereum generates around one block every 13 seconds.
+#### Delayed Emit
+To emit a signal after a time delay, emit with the delay method. The argument is the number of blocks to delay by. As of writing, ethereum generates around one block every 13 seconds.
 ```
 contract Sender {   
-	// Declare a trigger
-	trigger Update(uint info);
+	signal Update(uint info);
 
-	function x(uint info) public {
+	function sendDelayedUpdate(uint info) public {
 		emit Update(info).delay(1000);
 	}
 }
 ```
-* A common useful example would be to create an event handler that constantly updates its state periodically. This contact would look like something like this.
+A common useful example would be to create a contract that constantly updates its own state periodically.
 ```
 contract Heartbeat {
 	uint public count;
-	trigger Beep();
-	listener countBeeps;
+	signal Beep();
+
+	slot countBeeps() {
+        count = count + 1;
+        emit Beep().delay(1000);
+    }
 
 	constructor() public {
 		count = 0;
-		emit Beep().delay(1000);
-	}
-
-	countBeeps(Beep, () => {
-		count = count + 1;
+        countBeeps.bind(Beep);
 		emit Beep().delay(1000);
 	}
 }
 ```
 
-## 3. Blockchain Support:
+## 3. Blockchain Support
+This section will cover the additional components added to the blockchain state to implement signals/slots as well as how the blockchain state changes to reflect the emission of a signal or execution of a slot. This section relies heavily on the content from the Ethereum Yellow Paper. A more formal description will be presented in a seperate document.
 
-To bring these features to life, there are numerous challenges to address. These range from incentive mechanisms on the blockchain to introducing new constructs into solidity. In this section
-we will look at some of these issues and describe potential solutions. A formal description can be found in FORMALIZED.md.
+#### EVM Opcodes
+Blockchains can be considered to be a large distributed state machine that transitions states through the execution of transactions. A big part of a transaction is the execution of a smart contract from start to finish on the Ethereum Virtual Machine (EVM). Ethereum smart contracts are mostly written in a domain specific language called Solidity, and are compiled down to EVM bytecode. The EVM opcodes are the cause for the majority of state transitions on the blockchain. Current EVM opcodes as well as their state transitions can be found in the Ethereum Yellow Paper. To implement signals/slots, we introduce two new EVM opcodes, EMITSIG and LISTSIG. We will describe what their state transition represents after defining the new pieces of the blockchain state.
 
-#### Blockchain State
-In order for EVM to know which handlers to invoke at the emission of a trigger, there has to be some mapping between a trigger and its listeners. To this, we will have to treat events similar
-to storage state of contracts. Since triggers are encoded into the state, we will need new opcodes in EVM that act on this state.
+#### Signals
+For various reasons that will be apparent later, we need every signal on the network to have a unique identifier. We can get strong guarentees for a unique 32 byte identifier by using the `KEC()` hash function along with the contract address. For example, `sigID = KEC(contractAddr + offset)` should be sufficient to generate a unique identifier. If we have multiple signals in the same contract, we can adjust `offset` to produce multiple unique identifiers. This generation of unique identifiers should be done during contract creation.
 
-#### Execution of Listeners
-There are two options into how we execute handlers. We can either interrupt the emitter of the trigger and execute the event handler right away, or we have the execution of the event handler be
-delayed by creating another transaction on the spot. Because we can't be guarenteed about the size of event handlers, or whether they themselves emit events, we opted for the second option.
-Each time a trigger is emitted, EVM will create a new transaction for the event handler and will be put in a transaction pool to be picked out by miners. Another idea we have is to impose a
-contract wide lock to ensure that event handlers are executed before other calls to the contract.
+#### Slots
+Unlike signals, slots don't need an identifier. They exist as a pointer to the block of code that gets executed upon the emission of the signal that the slot binded to during contract creation. The signal that a slot binds to can be in any contract, including the same contract that contains the slot. The mechanism behind this binding is handled by the world state of the blockchain and will be explained next. When binding a slot to a signal, the exact location and identifier of the signal must be given. This includes the address of the contract that the signal resides in as well as the identifier discussed earlier. If an invalid contract address or signal identifier is used in the constructor, the handler code will never be executed. 
 
-#### Incentives
-We need to provide incentives to miners to validate the block. Because event handler transactions are generated dynamically, it doesn't have a set gas price. To solve this, we could have the gas
-price of the event handler contract be calculated as a fixed ratio (greater than 1) multiplied by the average gas price of the other contracts in the block. This way, miners would be incentivized to pick up
-these special transactions. Also, we would need to put a limit on the ratio between the number of event handler trasactions we have and normal transactions. The gas for the execution of event
-handlers payed for by the contract with the event handler, not the emitter. We also have to be careful to not overcharge users who want to use this feature properly.
+#### World State
+To implement signals/slots, the system needs to keep a mapping between signals and their corresponding slots. We can accomplish this by adding to the world state. Recall that the world state in Ethereum is a large Patricia Merkle Tree (trie) that performs the mapping `KEC(A) -> RLP((A.nonce, A.balance, A.storageRoot, A.codeHash))` where `A` is an account. We add another field `A.signalMap`. This will be a trie that performs the mapping `KEC(S) -> RLP(slot, L)` where `S` is a signal identifier and `L` is a list of addresses belonging to the contracts that are listening to signal `S`. The slot referred to in this trie is `A`'s response to signal `S`. If `A` does not have a slot binded to `S`, then the slot will be `NULL`. So in summary, each account will now have a trie that helps to map signal identifiers to a its own slot (can be `NULL`) and potentially several listener contract addresses. 
+To guarentee that slots are executed prior to any other pending transactions in this account, a counter called `A.activeSlots` is maintained. This counter is incremented whenever a slot transaction is queued up and decremented when a slot transaction gets executed and mined. This way, when miners are selecting which transactions to include in a block, only transactions belonging to contracts with `activeSlots` equal to 0 are valid to be included. 
 
-#### Concerns
-* One concern is that the EVM state could blow up if we had loops of triggers and listeners. We don't see this as an attack opportunity as the attack would have to pay for the gas of the event handler.
-Also emitting events costs more gas than the regular operation so there would be a limit to the number of times someone could emit events.
-* Another concern is whether the cost for event emitter is high enough so that they won't flood the system with events that no one listens to. We suggest to introduce cost to the emitter in the form of bonded storage. In other words, emitters need to "lock" some of their tokens for a period of time in order to emit an event.
+#### Block Header
+Now that we have a proper mapping between signals and slots/listeners, we need a way to queue up slots to be executed upon the emission of signals. We also need a way to verify that slots are executed properly and none are dropped. We do this by spontaneously creating a special slot transaction that can be picked up by miners to be mined and included in the next block. We store this in a trie that performs the mapping `KEC(blockNum) -> RLP(FIFOQUEUE((contractAddr, sigId, params)))`. On top of the trie, we also keep a counter `currentSigBlock` that keeps track of the current blocknum of signals that we are executing. Note that this counter can only be incremented once the fifo queue associated with the block number has been exhausted. Additionally, `currentSigBlock` must be less than or equal to the current block number that is being mined. This ensures that no slot transactions are dropped and that an execution order for slot transactions is enforced. Because this trie is a part of the block header, miners can easily verify the correctness of the queued up slot transactions by using the root hash of the trie. Whenever miners want to include slot transactions in their block, they need to just pop an element off the fifo queue mapped to by `KEC(currentSigBlock)`.
 
-### Implementation Proposal
-This is an informal description of how we propose to implement this feature on an actual blockchain network.
+#### State Transitions
 
-#### Unique triggers
-To make sure each trigger is identifiable, we assign it an id derived from the ethereum account address. During the contract construction, each trigger is given an arbitrary number. This number could just
-be 1 for the first trigger, 2 for the second and so on. We let the trigger id be `Tid`, arbitrarily assigned trigger number be `Tn`, and `A` be the contract address. Then: `Tid = KEC(A + Tn)`.
-This ensures that trigger id's are almost guarenteed to be unique. When an id is assigned it cannot change and will be the way we refer to this trigger in the future.   
-
-#### Account state
-When a trigger is emitted, the miners need to know which handlers correspond to that trigger. We accomplish this through a trie that maps any given relevant trigger id to the RLP encoding of the
-handling code as well as list of listening addresses. The code for the event handlers on this trie cannot be manipulated once the contract is deployed. However, listening contract addresses can be added
-on but only by external contracts. This trie is the basis for how we determine which handlers to use for each trigger. When a miner executes the emit instruction, we use the trigger id to index into the
-trie to figure out which contracts are listening to this event. A special handler transaction is then created and put on the block state and signed by the emitter of this trigger. 
-Nodes that aren't full can just store the root hash instead of the entire tree. In this transaction, there will be three fields. The listener contract address, the trigger id, and the blocknum.
-The blocknum indicates the blocknumber that we wait until before the transaction is valid to be executed.
-
-#### Block state
-To ensure that triggers are handled properly by miners, we add an extra field to the block. Similar to the transaction trie, we construct a handler trie consisting of all the handler transactions that 
-are queued up to be mined. This trie is populated accordingly when triggers are emitted. Transactions on the trie are removed when miners decide to process those handler transactions. It is to note 
-that it is invalid to process a transaction that has a blocknum greater than the current blocknum.  
-
-#### EVM
-The manipulations in the account state and block state are facillitated through a few new opcodes found in EVM. One of them will be used to emit triggers while the other will be used to subscribe a 
-listener to another event. Furthermore, changes to init will have to be made to construct the account state trie. More detailed consideration of these opcodes are in FORMALIZED.md.
-
-#### Generation of handler transactions
-There are two types of handler transactions to create corresponding to each of the trigger types: immediate trigger and delayed trigger. Immediate trigger requires the call to handler added to the transaction pool immediately after an event is seen. On the other hand, call to handler for a delayed trigger is added after the specified block time expires.
-
-Currently there are three ways to add transactions to the transaction pool of a node in the network. They all make calls to TransactionPool.insert_new_transactions:
-1. core/src/sync/message/transactions.rs: transactions received from the network are added to the pool
-2. core/src/light_protocol/provider: transactions generated by a light client
-3. client/src/rpc/impls/cfx.rs: transactions generated by a full node
-
-One way to generate the handler transactions is to have the clients to make a call to the handler when the corresponding trigger is seen (though 2 and 3). However, this would lead to redundant transactions being created by multiple clients. Another way is to populate the transaction while validating the trigger transaction inside the transaction pool. This requires addition of parameters to the configuration of transaction pool. At a glance, here is a few modifications required to core/src/transaction_pool/mod.rs:
-1. pub struct TransactionPool
-	- TransactionPoolInner
-	- VerificationConfig
-	- TxPoolConfig: required ratio between normal transactions and handler transactions, gas price for handler transactions
-2. insert_new_transactions
-	- where the lookup for handler happens
-	- generate transaction for handler calls here on behalf of the handler contract (also need to memorize a transaction for delayed handler) [Unanswered question: is it feasible to create a handler contract transaction in the transaction pool?]
+#### Mining Incentives
 
 
-## 4. Applications:
+## 4. Potential Applications
+In this section, we examine some useful applications of signals/slots in real world decentralized finance (DeFi) applications. DeFi applications generally all need a method for price updating. Currently this is implemented using periodic update functions that get called by an external account. We also see a lot of need to delayed execution of code as seen in Compound's timelock contract. Both periodic update functions as well as delayed execution of code can be achieved with signals/slots. 
 
 #### MakerDAO
-MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD,
-they need periodic updates to the outside prices. This is accomplished through the Median module and the Oracle Security Module (OSM).
+MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD, they need periodic updates to the outside prices. This is accomplished through the Median module and the Oracle Security Module (OSM).
 
 ![MakerDAO Price Update System](/images/mcd_osm.png)
 
-The Median communicates with outside sources to establish a price. The OSM delays this feed for the rest of the system for added security. Because there is no way
-for a smart contract to listen to the feed and update the price automatically, off-chain users have to 'poke' the contracts in order to update the price. Ideally, contracts such as Median
-could broadcast an event which OSM or Spot could act on instead of having an external user poke.
+The Median communicates with outside sources to establish a price. The OSM delays this feed for the rest of the system for added security. Because there is no way for a smart contract to listen to the feed and update the price automatically off-chain users have to 'poke' the contracts in order to update the price. Ideally, contracts such as Median could broadcast an event which OSM or Spot could act on instead of having an external user poke.
 
-The benefits to having this construct goes beyond style and convenience. On March 12-13, due to a huge drop in the crypto market as well as network congestion, many vault owners had their
-vaults liquidated for very little. There is a chance that with a new feature that allows for on-chain event handling, there would be less 'poking' across the entire Ethereum network and
-overall less network congestion.
+The benefits to having this construct goes beyond style and convenience. On March 12-13, due to a huge drop in the crypto market as well as network congestion, many vault owners had their vaults liquidated for very little. There is a chance that with a new feature that allows for on-chain event handling, there would be less 'poking' across the entire Ethereum network and overall less network congestion.
 
-The current implementation relies heavily on the external poke users. Therefore, a possible failure, which has been proved to be a threat to the integrity of the system, is the price
-is not updated frequently enough. This could arise for a few reasons including tragedy of the commons or miner collusion and could lead to negative outcomes such as inappropriate liquidations,
-or the  prevention of liquidations that should be possible.
+The current implementation relies heavily on the external poke users. Therefore, a possible failure, which has been proved to be a threat to the integrity of the system, is the price is not updated frequently enough. This could arise for a few reasons including tragedy of the commons or miner collusion and could lead to negative outcomes such as inappropriate liquidations, or the  prevention of liquidations that should be possible.
 ```
 // osm.sol: poke is supposed to be called by the poke user every hop (ONE_HOUR by default)
 /* next value becomes current if poke is done hop after the prev poke */
@@ -264,18 +218,7 @@ function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
 ```
 
 #### Compound
-Compound is an implementation of a decentralized money market, where suppliers and borrowers of
-various decentralized assets can accrue and pay interest. The interest rates are algorithmically
-derived and are based on the supply and demand for the asset. Similar to MakerDAO, they need a price
-feed which relies on an Oracle. We can find similar inefficiencies in implementation in Compound.
-
-In the compound protocol, the oracle is updated periodically through the setUnderlyingPrice() method. Other contracts
-who then need the price reading call the getUnderlyingPrice() method. This implies that it would be up to other contracts
-to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we
-the newest price but the new price feed hasn't come in yet. This also opens up the possibility for other contracts to lag
-behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a
-method for pulling the newest price, we can simply emit a trigger from setUnderlyingprice(). We then have all contracts
-that are interested in the price feed declare a listener to listen to the trigger and act on it.
+Compound is an implementation of a decentralized money market, where suppliers and borrowers of various decentralized assets can accrue and pay interest. The interest rates are algorithmically derived and are based on the supply and demand for the asset. Similar to MakerDAO, they need a price feed which relies on an Oracle. We can find similar inefficiencies in implementation in Compound. In the compound protocol, the oracle is updated periodically through the setUnderlyingPrice() method. Other contracts who then need the price reading call the getUnderlyingPrice() method. This implies that it would be up to other contracts to keep up to date with the oracle. It could very much be the case that there are redundant calls to the oracle, where we the newest price but the new price feed hasn't come in yet. This also opens up the possibility for other contracts to lag behind the most current price feed. This could be fixed using the new proposed feature. Instead of providing a method for pulling the newest price, we can simply emit a trigger from setUnderlyingprice(). We then have all contracts that are interested in the price feed declare a listener to listen to the trigger and act on it.
 
 In source file SimplePriceOracle.
 ```
@@ -299,15 +242,7 @@ contract SimplePriceOracle is PriceOracle {
 	...
 }
 ```
-
-This source file contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum
-delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol.
-This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon
-a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have
-to be implemented in a different way.
-Furthermore, the initial purpose of the Timelock contract is to provide a delay buffer for when a proposal is accepted
-and when it is taken into effect. If we could implement a time delay handler based on the block number, we theoretically
-wouldn't even need this time locking feature.
+This source file contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol. This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have to be implemented in a different way. Furthermore, the initial purpose of the Timelock contract is to provide a delay buffer for when a proposal is accepted and when it is taken into effect. If we could implement a time delay handler based on the block number, we theoretically wouldn't even need this time locking feature.
 
 In source file Timelock.sol:
 ```
@@ -380,11 +315,4 @@ function runPeriodicals() external returns (bool) {
 ```
 
 #### Other Notes:
-It is interesting to consider that each of the three DeFi applications above deploy their own oracle. It would be feasible
-with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting
-a single event.
-
-## References:
-
-
-
+It is interesting to consider that each of the three DeFi applications above deploy their own oracle. It would be feasible with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting a single event.
