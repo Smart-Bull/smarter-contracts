@@ -103,7 +103,7 @@ contract Heartbeat {
 This section will cover the additional components added to the blockchain state to implement signals/slots as well as how the blockchain state changes to reflect the emission of a signal or execution of a slot. This section relies heavily on the content from the Ethereum Yellow Paper. A more formal description will be presented in a seperate document.
 
 #### EVM Opcodes
-Blockchains can be considered to be a large distributed state machine that transitions states through the execution of transactions. A big part of a transaction is the execution of a smart contract from start to finish on the Ethereum Virtual Machine (EVM). Ethereum smart contracts are mostly written in a domain specific language called Solidity, and are compiled down to EVM bytecode. The EVM opcodes are the cause for the majority of state transitions on the blockchain. Current EVM opcodes as well as their state transitions can be found in the Ethereum Yellow Paper. To implement signals/slots, we introduce two new EVM opcodes, EMITSIG and LISTSIG. We will describe what their state transition represents after defining the new pieces of the blockchain state.
+Blockchains can be considered to be a large distributed state machine that transitions states through the execution of transactions. A big part of a transaction is the execution of a smart contract from start to finish on the Ethereum Virtual Machine (EVM). Ethereum smart contracts are mostly written in a domain specific language called Solidity, and are compiled down to EVM bytecode. The EVM opcodes are the cause for the majority of state transitions on the blockchain. Current EVM opcodes as well as their state transitions can be found in the Ethereum Yellow Paper. To implement signals/slots, we introduce three new EVM opcodes, BINDSIG and EMITSIG. We will describe what their state transition represents after defining the new pieces of the blockchain state.
 
 #### Signals
 For various reasons that will be apparent later, we need every signal on the network to have a unique identifier. We can get strong guarentees for a unique 32 byte identifier by using the `KEC()` hash function along with the contract address. For example, `sigID = KEC(contractAddr + offset)` should be sufficient to generate a unique identifier. If we have multiple signals in the same contract, we can adjust `offset` to produce multiple unique identifiers. This generation of unique identifiers should be done during contract creation.
@@ -113,15 +113,22 @@ Unlike signals, slots don't need an identifier. They exist as a pointer to the b
 
 #### World State
 To implement signals/slots, the system needs to keep a mapping between signals and their corresponding slots. We can accomplish this by adding to the world state. Recall that the world state in Ethereum is a large Patricia Merkle Tree (trie) that performs the mapping `KEC(A) -> RLP((A.nonce, A.balance, A.storageRoot, A.codeHash))` where `A` is an account. We add another field `A.signalMap`. This will be a trie that performs the mapping `KEC(S) -> RLP(slot, L)` where `S` is a signal identifier and `L` is a list of addresses belonging to the contracts that are listening to signal `S`. The slot referred to in this trie is `A`'s response to signal `S`. If `A` does not have a slot binded to `S`, then the slot will be `NULL`. So in summary, each account will now have a trie that helps to map signal identifiers to a its own slot (can be `NULL`) and potentially several listener contract addresses. 
-To guarentee that slots are executed prior to any other pending transactions in this account, a counter called `A.activeSlots` is maintained. This counter is incremented whenever a slot transaction is queued up and decremented when a slot transaction gets executed and mined. This way, when miners are selecting which transactions to include in a block, only transactions belonging to contracts with `activeSlots` equal to 0 are valid to be included. 
+To guarentee that slots are executed prior to any other pending transactions in this account, a counter called `A.activeSlots` is maintained. This counter is incremented whenever a slot transaction is queued up and decremented when a slot transaction gets executed and mined. This way, when miners are selecting which transactions to include in a block, only transactions belonging to accounts with `activeSlots` equal to 0 are valid. 
 
 #### Block Header
-Now that we have a proper mapping between signals and slots/listeners, we need a way to queue up slots to be executed upon the emission of signals. We also need a way to verify that slots are executed properly and none are dropped. We do this by spontaneously creating a special slot transaction that can be picked up by miners to be mined and included in the next block. We store this in a trie that performs the mapping `KEC(blockNum) -> RLP(FIFOQUEUE((contractAddr, sigId, params)))`. On top of the trie, we also keep a counter `currentSigBlock` that keeps track of the current blocknum of signals that we are executing. Note that this counter can only be incremented once the fifo queue associated with the block number has been exhausted. Additionally, `currentSigBlock` must be less than or equal to the current block number that is being mined. This ensures that no slot transactions are dropped and that an execution order for slot transactions is enforced. Because this trie is a part of the block header, miners can easily verify the correctness of the queued up slot transactions by using the root hash of the trie. Whenever miners want to include slot transactions in their block, they need to just pop an element off the fifo queue mapped to by `KEC(currentSigBlock)`.
+Now that we have a proper mapping between signals and slots/listeners, we need a way to queue up slots to be executed upon the emission of signals. We also need a way to verify that slots are executed properly and none are dropped. We do this by spontaneously creating a special slot transaction that can be picked up by miners to be mined and included in the next block. We store this in a trie that performs the mapping `KEC(blockNum) -> RLP(FIFOQUEUE(RLP(contractAddr, sigId, params)))`. This trie is represented by its root hash and will be referred to by `slotsRoot`. On top of the trie, we also keep a counter `currentSigBlock` that keeps track of the current blocknum of signals that we are executing. Note that this counter can only be incremented once the fifo queue associated with the block number has been exhausted. Additionally, `currentSigBlock` must be less than or equal to the current block number that is being mined. This ensures that no slot transactions are dropped and that an execution order for slot transactions is enforced. Because this trie is a part of the block header, miners can easily verify the correctness of the queued up slot transactions by using the root hash of the trie. Whenever miners want to include slot transactions in their block, they need to just pop an element off the fifo queue mapped to by `KEC(currentSigBlock)`.
 
 #### State Transitions
+In this subsection we will discuss how the new EVM opcodes BINDSIG and EMITSIG impact the world state and block header as well as what happens when slots are picked up and mined.
+##### BINDSIG
+This opcode takes the contract takes a contract address, signal identifier, and a slot (pointer to code) as arguments. BINDSIG can only be executed during contract creation. Let `A` be the account executing BINDSIG, `B` be the contract address passed as the argument, `SIG` be the signal identifier, and `SLT` be the slot. The first part of the execution involves updating the mapping so that `A.signalMap[SIG] -> RLP(SLT, NULL)`. At this time, the listener list should be `NULL`. Next, we form update the mapping on `B.signalMap` so that `B.signalMap[SIG] -> RLP(DC, L')` where `DC` is "don't care" and `L'` is the new list of listener contract addresses formed by appending `A` to the previous `L`. Note that having `A` be the same as `B` is valid,
+##### EMITSIG
+This opcode takes the signal identifier, block delay parameter, and pointer to the list of signal parameters as arguments. The block delay parameter must be greater than or equal to 0. EMITSIG can be called anywhere, including the contract constructor. Let `A` be the account that is executing EMITSIG. The system will use `A.signalMAP` to find the list of listener addresses. Let `Li` be i'th listener in the list. We increment `Li.activeSlots` to reflect that they now have a slot queued up for execution. The next step is to change the block header. Using the current block number and the delay parameter, we calculate the block number at which the slot should be executed. Let this be `B`. We then update the mapping in the queued slot tree so that `KEC(B) -> RLP(FIFOQUEUE(...).push(RLP(Li, SIG, P)))`. In this step, we also copy over the parameters into `P`. 
+##### Mining a Slot 
+The next step is for miners to pick up these special slot transactions, execute them, and include them in the next block. As mentioned before, a miner picks the slot transaction by popping an item off the queue mapped to by `KEC(currentSigBlock)`. If the queue is empty, increment `currentSigBlock` and try again until a valid slot is returned or that `currentSigBlock` becomes greater than the current block number. Once a slot transaction is returned, the miner can then use the `contractAddr` and `sigID` fields to index into the world state to find the code pointer of where execution of the slot should start. Once executed, the `activeSlots` counter on that contract is decremented. The counter is decremented no matter if the execution passed or failed. Gas is then taken off the account with the slot and paid to the miner. If execution failed due to a shortage of gas, state is reverted and the miner keeps the fees. 
 
 #### Mining Incentives
-
+When talking about state transitions, we left out one important aspect about mining. What is the gas price? To incentivize miners to do the extra work of supporting signals/slots, a fixed ratio multipled by the average gas price of regular transactions in the block will be used. We also ensure that a maximum ratio of slot to regular transactions is enforced. Because the gas price of slot transactions is always greater than the regular transactions, miners will be incentivized to mine these blocks. All execution fees are paid for by the contract which owns the slot.
 
 ## 4. Potential Applications
 In this section, we examine some useful applications of signals/slots in real world decentralized finance (DeFi) applications. DeFi applications generally all need a method for price updating. Currently this is implemented using periodic update functions that get called by an external account. We also see a lot of need to delayed execution of code as seen in Compound's timelock contract. Both periodic update functions as well as delayed execution of code can be achieved with signals/slots. 
@@ -170,7 +177,7 @@ With the new syntax defined, those two functions can be rewritten as following:
 // osm.sol: poke is supposed to be called by the poke user every hop (ONE_HOUR by default)
 /* next value becomes current if poke is done hop after the prev poke */
 
-trigger PriceUpdate(uint price);
+signal PriceUpdate(uint price);
 
 function poke() external note stoppable {
 	require(pass(), "OSM/not-passed");
@@ -195,25 +202,16 @@ struct Ilk {
 }
 
 mapping (bytes32 => Ilk) public ilks;
-// Declare a listener
-listener updatePrice;
 
-// --- Registering osm ---
-function file(bytes32 ilk, bytes32 what, address osm_) external note auth {
-	require(live == 1, "Spotter/not-live");
-	if (what == "pip") {
-		ilks[ilk].pip = OSM(osm_);
+// Declare a slot
+slot updatePrice(uint new_val) {
+	uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
+	vat.file(ilk, "spot", spot);
+	emit Poke(ilk, val, spot); // just for logging, can be removed
+}
 
-		// instantiate a listener for each crypto price update
-		updatePrice(ilks[ilk].pip.PriceUpdate, (new_price) => {
-			uint256 spot = has ? rdiv(rdiv(mul(new_price, 10 ** 9), par), ilks[ilk].mat) : 0;
-			vat.file(ilk, "spot", spot);
-			emit Poke(ilk, val, spot); // just for logging, can be removed
-		});
-		listen updatePrice;
-		price_listeners[ilk] = updatePrice;
-	}
-	else revert("Spotter/file-unrecognized-param");
+constructor(...) public {
+    updatePrice.bind(ilks[ilk].pip.PriceUpdate);
 }
 ```
 
@@ -224,7 +222,6 @@ In source file SimplePriceOracle.
 ```
 contract SimplePriceOracle is PriceOracle {
 	...
-
     function getUnderlyingPrice(CToken cToken) public view returns (uint) {
         if (compareStrings(cToken.symbol(), "cETH")) {
             return 1e18;
@@ -232,43 +229,27 @@ contract SimplePriceOracle is PriceOracle {
             return prices[address(CErc20(address(cToken)).underlying())];
         }
     }
-
+    
     function setUnderlyingPrice(CToken cToken, uint underlyingPriceMantissa) public {
         address asset = address(CErc20(address(cToken)).underlying());
         emit PricePosted(asset, prices[asset], underlyingPriceMantissa, underlyingPriceMantissa);
         prices[asset] = underlyingPriceMantissa;
     }
-
 	...
 }
 ```
-This source file contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol. This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have to be implemented in a different way. Furthermore, the initial purpose of the Timelock contract is to provide a delay buffer for when a proposal is accepted and when it is taken into effect. If we could implement a time delay handler based on the block number, we theoretically wouldn't even need this time locking feature.
+The source file Timelock.sol contains a series of time sensitive methods/actions. To make them time sensitive, a minimum and maximum delay between different calls is enforced. This means that the user has to time these calls to comply with the protocol. This could be made easier with the inclusion of triggers. If triggers existed, then a transaction could be executed upon a trigger emitted in queue_transaction. However under this construct, the method of cancelling a transaction would have to be implemented in a different way. Furthermore, the initial purpose of the Timelock contract is to provide a delay buffer for when a proposal is accepted and when it is taken into effect. If we could implement a time delay handler based on the block number, we theoretically wouldn't even need this time locking feature.
 
 In source file Timelock.sol:
 ```
 contract Timelock {
 	...
-
     function queueTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public returns (bytes32) {
         require(msg.sender == admin, "Timelock::queueTransaction: Call must come from admin.");
         require(eta >= getBlockTimestamp().add(delay), "Timelock::queueTransaction: Estimated execution block must satisfy delay.");
-
-        bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
-        queuedTransactions[txHash] = true;
-
-        emit QueueTransaction(txHash, target, value, signature, data, eta);
-        return txHash;
+        ..
     }
-
-    function cancelTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public {
-        require(msg.sender == admin, "Timelock::cancelTransaction: Call must come from admin.");
-
-        bytes32 txHash = keccak256(abi.encode(target, value, signature, data, eta));
-        queuedTransactions[txHash] = false;
-
-        emit CancelTransaction(txHash, target, value, signature, data, eta);
-    }
-
+    ...
     function executeTransaction(address target, uint value, string memory signature, bytes memory data, uint eta) public payable returns (bytes memory) {
         require(msg.sender == admin, "Timelock::executeTransaction: Call must come from admin.");
 
@@ -276,14 +257,8 @@ contract Timelock {
         require(queuedTransactions[txHash], "Timelock::executeTransaction: Transaction hasn't been queued.");
         require(getBlockTimestamp() >= eta, "Timelock::executeTransaction: Transaction hasn't surpassed time lock.");
         require(getBlockTimestamp() <= eta.add(GRACE_PERIOD), "Timelock::executeTransaction: Transaction is stale.");
-
 		...
-
-        emit ExecuteTransaction(txHash, target, value, signature, data, eta);
-
-        return returnData;
     }
-
 	...
 }
 ```
