@@ -13,7 +13,9 @@
 
 
 \section{Introduction}
-This document presents the formal definitions behind signals and slots in a blockchain execution environment. A familiarity with the Ethereum Yellow Paper is expected prior to reading this document. In this section, we highlight a few important values and functions.
+The aim of this document is to provide a theoretical framework for how signals and slots might be implemented on top of a real blockchain network. In our case, we chose to implement the feature on top of Ethereum. As a result, a familiarity with the Ethereum Yellow Paper is expected. In a separate document we will build a simple theoretical virtual machine from scratch to better demonstrate how such a feature looks.
+\\\\
+The following are a few important values and functions used throughout the document.
 \begin{itemize}
     \item $\sigma$: world state
     \item $\mu$: machine state
@@ -25,50 +27,50 @@ This document presents the formal definitions behind signals and slots in a bloc
 
 
 \section{Signals and Slots}
-We denote signals as $E$ with the following fields:
+We denote a signal instance, $E$, as a tuple with the following fields:
 \begin{itemize}
-    \item owner, $E_a$: The address of the contract that this signal belongs to.
-    \item identifier, $E_{i}$: A unique identifier associated with a signal generated during contract creation. By assigning each signal a unique ephemeral $sigLocalId$ during contract creation, \texttt{KEC}($E_a + sigLocalId$) can be used to generate a unique identifier.
-    \item data, $E_d$: An arbitrary size byte array containing the output data of the signal.
+    \item owner, $E_a$: The address of the contract that owns this signal.
+    \item identifier, $E_{i}$: A unique identifier associated with a signal that is defined during contract creation. This is accomplished by assigning each signal a unique ephemeral $sigLocalId$ during contract creation. \texttt{KEC}($E_a + sigLocalId$) can then be used to generate a unique identifier.
+    \item data, $E_d$: An infinite size byte array containing the output data of the signal.
 \end{itemize}
-We denote slots as $L$ with the following fields:
+We denote a slot instance, $L$, as a tuple with the following fields:
 \begin{itemize}
-    \item owner, $L_a$: The address of the contract that this slot belongs to. This is also the address that pays for the gas consumed during the execution of the slot.
+    \item owner, $L_a$: The address of the contract that owns this slot. This is also the address that pays for the gas consumed during the execution of the slot.
     \item code, $L_c$: A pointer to executable EVM code that is the entry point to the slot.
+    \item gasPriceRatio, $L_p$: A scalar value greater or equal to zero indicating how much is willing to be payed for gas relative to the average gas price of regular transactions. The higher this value, the more likely this slot transaction will be mined.
     \item gasLimit, $L_g$: A scalar value equal to the maximum amount of gas that should be used in executing this slot.
-    \item nonce, $L_n$: A scalar counter recording the number of previous call to the slot. 
 \end{itemize}
-Note: each $L$ can be attached to only one $E$ while each $E$ can be listened by multiple $Ls$.  
+Note: each slot can be attached to only one signal while each signal can be listened by multiple slots.  
+    
     
 \section{World State}
 All entities have their necessary information stored in an account, represented by a 20-byte address $\alpha$. The world state is a mapping between addresses and account states. An account state $\sigma[\alpha]$ has the following five fields:
 \begin{itemize}
-    \item nonce, $\sigma[\alpha]_{n}$: A scalar counter recording the number of previous activities initialized by this account.
-    \item balance, $\sigma[\alpha]_{b}$: A scalar value representing the number of Wei owned by this account. 
-    \item storageRoot, $\sigma[\alpha]_{s}$: Hash of the root node of the trie that encodes the storage content of this account.
-    \item codeHash, $\sigma[\alpha]_{c}$: Hash of the EVM code that gets executed when $\sigma[\alpha]$ receives a message call. This is immutable once established. 
-    \item slotRoot, $\sigma[\alpha]_{l}$: Hash of the root node of the trie that maps $E_{i}$ to \texttt{RLP}(
-    \texttt{LIST}($L$)). 
-    \item slotCount, $\sigma[\alpha]_{lc}$: A scalar counter recording the number of queued slot transactions pointing to this address. Normal transactions are blocked unless this counter is zero.
+    \item nonce, $\sigma[\alpha]_n$: A scalar counter recording the number of previous activities initialized by this account.
+    \item balance, $\sigma[\alpha]_b$: A scalar value representing the number of Wei owned by this account. 
+    \item storageRoot, $\sigma[\alpha]_s$: Hash of the root node of the trie that encodes the storage content of this account.
+    \item codeHash, $\sigma[\alpha]_c$: Hash of the EVM code that gets executed when $\sigma[\alpha]$ receives a message call. This is immutable once established. 
+    \item slotRoot, $\sigma[\alpha]_l$: Hash of the root node of the trie that maps $E_{i}$ to $\texttt{RLP}(
+    \texttt{LIST}(L))$. 
+    \item slotQueue, $\sigma[\alpha]_{lq}$: Hash of the queue that contains all slot transactions related to this account.
 \end{itemize}
 Therefore an account state $\sigma[\alpha]$ can be represented as the following tuple:
 \begin{equation*}
-    \sigma[\alpha] \equiv (\sigma[\alpha]_n, \sigma[\alpha]_b, \sigma[\alpha]_s, \sigma[\alpha]_c, \sigma[\alpha]_l, \sigma[\alpha]_{lc})
+    \sigma[\alpha] \equiv (\sigma[\alpha]_n, \sigma[\alpha]_b, \sigma[\alpha]_s, \sigma[\alpha]_c, \sigma[\alpha]_l, \sigma[\alpha]_{lq})
 \end{equation*}
 
 
 \section{Slot Transaction}
-Slot Transaction $ST$ is a single instruction resulted from a signal instance at an emitter contract $\sigma[\alpha_{emitter}]$ that are directed to some slot in a listener contract $\sigma[\alpha_{listener}]$. These transactions do not require signature from either party because its validation is done according to the signal trie maintained in the storage. The fields included in a special transaction are:
+A slot Transaction $ST$ is a transaction generated as a response to a signal emitted from $\sigma[\alpha_{emitter}]$. These transactions do not require any signature as its validation is done according to the slot trie and queue maintained in the world state as well as block headers. The only two fields included in a $ST$ are:
 \begin{itemize}
-    \item nonce, $ST_n$: A scalar value equal to the number of previous ST from the signal and handler combination. 
-    \item signal, $ST_e$: A pointer to the signal tuple $E$ of interest.
-    \item slot, $ST_l$: A pointer to the slot tuple $L$ of interest.
+    \item signal, $ST_e$: A signal tuple instance $E$ of interest.
+    \item slot, $ST_l$: A slot tuple instance $L$ of interest.
 \end{itemize}
 
 
 \newpage
 \section{Block Header}
-Currently, every Conflux block $B$ consists of two parts: a block header $H$ and a list of transactions $Ts$. On top of this block structure, we are adding list of special transactions, $STs$. The block header $H$ is a collection of relevant pieces of information:
+The block header $H$ is a collection of relevant pieces of information:
 \begin{itemize}
     \item parentHash, $H_p$: Keccak 256-bit hash of the parent block’s header.
     \item refereeHash, $H_o$: serialized RLP sequence of the referee list consisting of Keccak 256-bit hashes of referee blocks.
@@ -85,13 +87,19 @@ Currently, every Conflux block $B$ consists of two parts: a block header $H$ and
     \item gasLimit, $H_l$: scalar value to the current limit of gas expenditure per block.
     \item timestamps, $H_s$: Unix time.
     \item nonce, $H_n$: Value that proves that a sufficient amount of work has been carried out on this block.
-    \item slotTransactionRoot, $H_{st}$: Hash of the root node of slot handler trie, $H_{st}$. The trie is a mapping of \texttt{KEC}($slotMinHeight$) to \texttt{RLP}(\texttt{FIFO}($ST$))). $slotMinHeight$ indicatess the minimum height the corresponding $STs$ can be called. Once all $STs$ at a certain $slotMinHeight$ are proceeded, the corresponding leaf can be pruned from the trie.
+    \item slotTransactionRoot, $H_{st}$: Hash of the root node of slot handler trie. The trie maps \texttt{KEC}($blockNumber$) to \texttt{RLP}(\texttt{QUEUE}($ST$))). This trie holds the list of transactions that need to be queued at each later block number. This trie is periodically pruned as blocks get mined.  
 \end{itemize}
-Therefore the block $B$ can be represented as follows:
+Currently, every block $B$ consists of two parts: a block header $H$ and a list of transactions $Ts$. On top of this block structure, we are adding list of special transactions, $STs$. Therefore the block $B$ can be represented as follows:
 \begin{equation*}
     B \equiv (B_H, B_{Ts}, B_{STs})
 \end{equation*}
-
+\\
+Upon the mining of a block, the following state change is made to keep the slot queues in each account up to date. Let $B$ be the previous block header and $B'$ be the new block header.
+\begin{align*}
+    while \ &B_{st}[B'_i] \neq \varnothing: \\
+    &ST = B_{st}[B'_i].\texttt{DEQUEUE}() \\
+    &\sigma[\{ST_l\}_a]_lq.\texttt{ENQUEUE}(ST) \\
+\end{align*}
 
 \newpage
 \section{Execution Environment}
@@ -126,8 +134,6 @@ $I_b$ & the byte array that is the machine code to be executed. \\
 $I_H$ & the block header of the present block \\
 $I_e$ & the depth of the present message-call or contract-creation (i.e. the number of CALLs or CREATEs being executed at present)\\
 $I_w$ & the permission to make modifications to the state\\
-$I_{si}$ & a signal emitted \\
-$I_h$ & a handler that need to be attached \\
 \end{tabular}
 
 
@@ -135,23 +141,14 @@ $I_h$ & a handler that need to be attached \\
 \section{Slot Transaction Execution}
 This section formalizes how slot transactions are executed. Firstly a slot transaction is popped off $H_{st}$ and the addresses listener changes state. Next, a gas price and limit are determined and an upfront cost is charged to the slot account. Finally, an execution environment is set up and executed in the same way as a regular transaction.
 \\\\
-\textbf{State Change}: The following state changes occur to execute the slot. 
-\\\\
-$GET\_ST:$\\
-$curHeight = min(H_{h}, H_{st}.keySet)$\\
-$ST = H_{st}[curHeight].\texttt{DEQUEUE}()$\\
-%$if(ST = \varnothing \land H_{sh} \leq H_i) \{ H_{sh}+=1; JUMP\ GET\_ST \}$\\\\
-$if(ST \neq \varnothing)\{\\$
-\phantom{x}\hspace{3ex} $\sigma'[\{ST_l\}_a]_{sc} = \sigma[\{ST_l\}_a]_{sc} - 1$\\
-\phantom{x}\hspace{3ex} $ST_n = \{ST_l\}_n$\\
-\phantom{x}\hspace{3ex} $\sigma'[\{ST_l\}_n] = \sigma[\{ST_l\}_n] + 1$\\
-\phantom{x}\hspace{3ex} $if(H_{st}[curHeight].empty)\{\sigma'[H_{st}[curHeight]] = \varnothing\}$\\
-$\}$\\
-return $ST$
-\\\\
-\textbf{Gas Price}: To execute a slot transaction, we need to determine the gas price $I_p$. We calculate this by multiplying the average gas price of regular transactions in the previous block by $SlotTransactionGasRatio$. Let the previous block be denoted as $B'$, hence the transactions in the previous block is $B_{Ts}'$.
+\textbf{State Change}: To get an $ST$ from account $\alpha$, the following state change takes place:
 \begin{equation*}
-I_p = SlotTransactionGasRatio \cdot \frac{\sum_{T \in B_{Ts}'} T_p}{|B_{Ts}'|} 
+ST = \sigma[\alpha]_{lq}.\texttt{DEQUEUE}()
+\end{equation*}
+\\
+\textbf{Gas Price}: To execute a slot transaction, we need to determine the gas price $I_p$. We calculate this by multiplying the average gas price of regular transactions in the previous block by $\{ST_l\}_p$. Let the previous block be denoted as $B'$, hence the transactions in the previous block is $B_{Ts}'$.
+\begin{equation*}
+I_p = \{ST_l\}_p \cdot \frac{\sum_{T \in B_{Ts}'} T_p}{|B_{Ts}'|} 
 \end{equation*}
 \\
 \textbf{Gas Limit}: The gas limit is set to $\{ST_l\}_g$.
@@ -179,12 +176,14 @@ G_{txdatanonzero} &\text{otherwise.}
 \begin{align*}
     ST_l \ &\neq \ \varnothing \ \ \land \\
     \sigma[\{ST_l\}_a] \ &\neq \ \varnothing \ \ \land \\
-    ST_n \ &> \ ST_n' \ \ \forall \ \ \{ST': ST'\in B_{STs} \land ST_l' =  ST_l\} \ \ \land \\
+    \{ST_l\}_n \ &> \ \sigma[\{ST_l\}_a]_n \ \ \land \\
+    %\ \ \forall \ \ \{ST': ST'\in B_{STs} \land ST_l' =  ST_l\} \ \ \land \\
     g_0 \ &\leq \ \{ST_l\}_g \ \ \land \\
     v_0 \ &\leq \ \sigma[\{ST_l\}_a]_b \ \ \land \\
+    \{ST_l\}_p \ &> \ 0 \ \ \land \\
     \{ST_l\}_g \ &\leq \ B_{H1} - l(B_R)_u
 \end{align*}
-\\
+\\\\\\\\\\\\\\\
 \textbf{Regular Transaction Validity}: The validity check of a regular transaction is changed slightly to accommodate slots. Note that in the Ethereum Yellow Paper, the address of transaction $T$ is denoted as $S(T)$. Because $S$ is used a lot in this document, the address of transaction $T$ is referred to as $T_a$.
 \begin{align*}
     T_a \ &\neq \ \varnothing \ \ \land \\
@@ -193,7 +192,7 @@ G_{txdatanonzero} &\text{otherwise.}
     g_0 \ &\leq \ T_g \ \ \land \\
     v_0 \ &\leq \ \sigma[T_a]_b \ \ \land \\
     T_g \ &\leq \ B_{H1} - l(B_R)_u \ \ \land \\
-    \sigma[T_a]_{lc} \ &= \ 0 \\ 
+    \sigma[T_a]_{lq} \ &= \ \varnothing \\ 
 \end{align*}
 \\
 \textbf{Execution Environment}: With the above information, an execution environment can be initialized. Once the execution environment is set up, it can be executed like a normal transaction.
@@ -219,35 +218,41 @@ The machine state is set up as follows:
 \end{itemize}
 
 
+% \newpage
+% \section{Transaction Pool}
+
+
 \newpage
 \section{BINDSIG and EMITSIG Opcodes}
-Note: $\delta$ is the number of items required on the stack for a given operation, $\alpha$ is the number of items returned/added on the stack for a given operation. 
+The following are the formal definitions of BINDSIG and EMITSIG. $\delta$ is the number of inputs via the stack and $\alpha$ is the number of items returned/added on the stack. \\
 
 \begin{tabular}{l|l|l|p{9cm}}
 \textbf{Opcode} & $\delta$ & $\alpha$ & \textbf{Description} \\
 \hline
 \hline
 \makecell{BINDSIG} & \makecell{5} & \makecell{1} & \makecell[l]{
-This opcode binds a listener to a signal specified with its sigId.\\ It binds a new leaf to the slot trie of the emitter contract. \\
+\\This opcode binds a listener to a signal specified with its sigId.\\ It binds a new leaf to the slot trie of the emitter contract. \\\\
 \begin{tabular}{l|l}
 \textbf{item on stack} & \textbf{Description} \\
 \hline
 0 & emitter contract address \\
 1 & sigId \\
-2 & slotPtr \\
-3 & gasLimit \\
-\end{tabular}\\
-if $\sigma[I_a]\geq storageDeposit$: \\
+2 & codePtr \\
+3 & gasPriceRatio \\
+4 & gasLimit \\
+\end{tabular}\\\\
+if $\sigma[I_a] \neq \varnothing \land \sigma[\mu_s[0]] \neq \varnothing$: \\
 \phantom{x}\hspace{3ex} $\sigma' = \sigma$, except\\
-\phantom{x}\hspace{6ex} $\sigma'[\mu_s[0]]_l = \sigma[\mu_s[0]]_l[\mu_s[1]].\texttt{INSERT}((I_a, \mu_s[2], \mu_s[3]))$\\
-\phantom{x}\hspace{6ex} and $\mu_s'[0]=1$\\
+\phantom{x}\hspace{6ex} $let \ L = (I_a, \mu_s[2], \mu_s[3], \mu_s[4])$\\
+\phantom{x}\hspace{6ex} $\sigma'[\mu_s[0]]_l = \sigma[\mu_s[0]]_l[\mu_s[1]].\texttt{INSERT}(L)$\\
+\phantom{x}\hspace{6ex} $\mu_s'[0]=0$\\
 else:\\
 \phantom{x}\hspace{3ex} $\sigma' = \sigma$,
-$\mu_s'[0]=0$
+$\mu_s'[0]=1$
 }\\
 \hline
 \makecell{EMITSIG} & \makecell{5} & \makecell{1} & \makecell[l]{
-This opcode creates an instance for the signal specified with its\\ sigId. It binds a new leaf to the signal trie. \\
+\\This opcode creates an instance for the signal specified with its\\ sigId. It binds a new leaf to the signal trie. \\\\
 \begin{tabular}{l|l}
 \textbf{item on stack} & \textbf{Description} \\
 \hline
@@ -255,17 +260,17 @@ This opcode creates an instance for the signal specified with its\\ sigId. It bi
 1 & number of block delayed \\
 2 & pointer to signal data byte array \\
 3 & number of elements in signal data byte array  \\
-\end{tabular}\\
-if $\sigma[I_a]\geq storageDeposit$: \\
+\end{tabular}\\\\
+if $\sigma[I_a]\neq \varnothing \land \mu_s[1] \geq 0$: \\
 \phantom{x}\hspace{3ex} $\sigma' = \sigma$, except\\
 \phantom{x}\hspace{6ex} $\forall L \in \sigma[I_a]_l[\mu_s[0]]:$\\
-\phantom{x}\hspace{9ex} $H_{st}[I_H_i + \mu_s[1]].\texttt{ENQUEUE}(\texttt{RLP}((I_a, \mu_s[0], (I_b[\mu_s[2] + 0], \dots I_b[\mu_s[2] + \mu_s[3]])), L)$\\
-\phantom{x}\hspace{9ex}  $\sigma'[L_a]_{lc} = \sigma[L_a]_{lc}+ 1$ \\
-\phantom{x}\hspace{6ex} and $\mu_s'[0]=1$\\
+\phantom{x}\hspace{9ex} $let \ E = (I_a, \mu_s[0], (I_b[\mu_s[2] + 0], \dots I_b[\mu_s[2] + \mu_s[3]]))$\\
+\phantom{x}\hspace{9ex} $H_{st}[I_H_i + \mu_s[1]].\texttt{ENQUEUE}(\texttt{RLP}(E, L))$\\
+\phantom{x}\hspace{6ex}  $\mu_s'[0]=0$\\
 else:\\
 \phantom{x}\hspace{3ex} $\sigma' = \sigma$,
-$\mu_s'[0]=0$
-}
+$\mu_s'[0]=1$
+}\\
 \end{tabular}
 
 \end{document}
