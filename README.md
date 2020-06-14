@@ -18,6 +18,7 @@ This repository presents a high level description of our conception and implemen
     * MakerDAO
     * Compound
     * Augur
+5. Implementation on Conflux
 
 ## 1. Specifications
 The general idea of signals and slots is to provide a framework for contracts to execute a certain block of code when a certain event occurs. We call the event a 'signal' and the listener a 'slot'. In the signals/slots construct, the emitter of the signal does not need to know who is listening to the signal. This property is very useful for smart contract development because this allows developers to add slots to a certain signals without redeploying the contract that emits the signal. 
@@ -59,15 +60,15 @@ contract Receiver {
 	Sender public s;
 
 	// Declare a slot and define its code
-	slot updateHandler(new_info) {
+    slot updateHandler(new_info) {
         info = new_info;
     }
 
-	// Get ABI of Sender and bind updateHandler to it
-	constructor(address sender_addr) public {
-		s = Sender(sender_addr);
+    // Get ABI of Sender and bind updateHandler to it
+    constructor(address sender_addr) public {
+        s = Sender(sender_addr);
         updateHandler.bind(s.Update);
-	}
+    }
 }
 ```
 #### Delayed Emit
@@ -77,7 +78,7 @@ contract Sender {
 	signal Update(uint info);
 
 	function sendDelayedUpdate(uint info) public {
-		emit Update(info).delay(1000);
+	    emit Update(info).delay(1000);
 	}
 }
 ```
@@ -137,7 +138,7 @@ In this section, we examine some useful applications of signals/slots in real wo
 #### MakerDAO
 MakerDAO implements a decentralized collateral backed stable currency called Dai. The value of Dai is soft-pegged to 1 USD. In order for MakerDAO to keep the value of Dai soft-pegged to USD, they need periodic updates to the outside prices. This is accomplished through the Median module and the Oracle Security Module (OSM).
 
-![MakerDAO Price Update System](/images/mcd_osm.png)
+![MakerDAO Price Update System](/examples/images/mcd_osm.png)
 
 The Median communicates with outside sources to establish a price. The OSM delays this feed for the rest of the system for added security. Because there is no way for a smart contract to listen to the feed and update the price automatically off-chain users have to 'poke' the contracts in order to update the price. Ideally, contracts such as Median could broadcast an event which OSM or Spot could act on instead of having an external user poke.
 
@@ -267,7 +268,7 @@ contract Timelock {
 #### Augur
 Augur is a prediction market on Ethereum. It uses a communal system driven by incentives to resolve the outcome of markets instead of using an oracle.
 
-![Augur disputation workflow](/images/augur_disputation.png)
+![Augur disputation workflow](/examples/images/augur_disputation.png)
 
 The process is as following: After a market enters reporting phase, an Initial Reporter (typically the market creator), selects an outcome as the *Tentative Winning Outcome.* A user can *dispute* the Tentative Winning Outcome by staking REP on an alternative outcome. If a *Dispute Bond* is reached on an alternative outcome, the Tentative Winning Outcome changes to the new alternative outcome. Dispute Bond increases for each round of disputation.
 
@@ -289,6 +290,14 @@ function runPeriodicals() external returns (bool) {
     return true;
 }
 ```
+
+## 5. Implementation on Conflux
+This document aims to provide a rough outline for how this feature should be implemented on the conflux chain. Three main components of the Conflux core need to be changed.
+1. Execution. Because we need to implement BINDSIG and EMITSIG opcodes, changes to the execution componenent of the core must be made. The particular areas of code that handle execution and change of state are found in the directorys /core/src/vm, /core/src/evm, and /core/src/executive. 
+2. State. To maintain the signal-slot mapping trie in each account, we will need to modify /core/src/state, particularily the account_entry. The block state during execution can be found in core/src/vm/env.rs and is set up in /core/src/consensus/consensus_executor.rs. These will have to be changed to implement the global slot transaction trie.
+3. Transaction Pool. Slot transactions will have to be added to the transaction pool to be handled by miners. 
+4. Validation. High level state changes to executing a slot transaction will have to be implemented. This includes checking the validity of a slot transaction and regular transaction as well as popping the slot transaction queue found in each accound state.
+
 
 #### Other Notes:
 It is interesting to consider that each of the three DeFi applications above deploy their own oracle. It would be feasible with on-chain triggers to have only one trusted Oracle that updates the states of all the DeFi price feeds through emitting a single event.

@@ -1,0 +1,1 @@
+Example source code pulled from various repositories demonstrating potential use cases of signals and slots.
